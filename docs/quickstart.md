@@ -333,7 +333,7 @@ in your Markdown.
 `b2 ask` streams an answer grounded in your own notes. B2 retrieves the most relevant
 passages with the same hybrid search as step 6, hands the model only those, and the answer
 cites them by `[n]`. It needs a model server: Ollama by default (`ollama serve`, then
-`ollama pull llama3.2`); any OpenAI-compatible endpoint works via `--llm-url`/`--llm-model`.
+`ollama pull gemma4:e2b`); any OpenAI-compatible endpoint works via `--llm-url`/`--llm-model`.
 
 ```console
 $ b2 ask "why does spacing out reviews beat cramming?"
@@ -486,7 +486,7 @@ they are, `search` refuses rather than mixing embedding spaces.
 | `B2_VAULT_PATH` | Vault root, so commands find it without `-C`. An explicit `-C`/`--vault` overrides it. Read-only commands fall back to the current dir; commands that write (`reindex`/`add`/`write`/`mv`/`rm`/`link`) require it explicitly |
 | `B2_EMBEDDER=fake` | Offline mode: deterministic non-semantic embedder. Search runs keyword-only |
 | `HF_ENDPOINT` | The standard Hugging Face mirror setting: the endpoint `b2 init` downloads from when the config's `source` names none |
-| `B2_LLM_URL` / `B2_LLM_MODEL` | The OpenAI-compatible chat endpoint + model for `ask`/`chat` (defaults: `http://localhost:11434/v1`, Ollama's, and `llama3.2`). The `--llm-url`/`--llm-model` flags beat the env, which beats the default |
+| `B2_LLM_URL` / `B2_LLM_MODEL` | The OpenAI-compatible chat endpoint + model for `ask`/`chat` (defaults: `http://localhost:11434/v1`, Ollama's, and `gemma4:e2b`). The `--llm-url`/`--llm-model` flags beat the env, which beats the default |
 | `B2_LLM_API_KEY` | Bearer token for a cloud chat endpoint. An env var, never a flag, because a key in a flag is a key in `ps`. The desktop stores its key in the macOS Keychain instead |
 | `B2_LLM=fake` | The deterministic chat provider: `B2_EMBEDDER=fake`'s sibling for `ask`/`chat` |
 | `B2_LLM_MAX_TOOL_CALLS` | The most tool calls one model reply may carry in `b2 why` (default 64, allowed 1 to 4096). A reply over the cap fails with its own message rather than being cut short. An invalid value keeps the default and logs a warning. The desktop's Settings → Chat field overrides it |

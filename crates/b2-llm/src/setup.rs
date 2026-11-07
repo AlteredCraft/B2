@@ -127,24 +127,18 @@ pub struct ModelTier {
 
 /// The tiers, smallest first. Illustrative and non-binding: a starting point, not a
 /// hardware floor.
-pub const MODEL_TIERS: [ModelTier; 3] = [
+pub const MODEL_TIERS: [ModelTier; 2] = [
     ModelTier {
         min_ram_gb: 0,
         ram: "8 GB",
-        size: "3–4B (4-bit)",
-        model: "llama3.2",
+        size: "2–4B (4-bit)",
+        model: "gemma4:e2b",
     },
     ModelTier {
         min_ram_gb: 16,
-        ram: "16 GB",
+        ram: "16 GB or more",
         size: "7–8B",
-        model: "llama3.1:8b",
-    },
-    ModelTier {
-        min_ram_gb: 32,
-        ram: "32 GB or more",
-        size: "12–14B and up",
-        model: "gemma3:12b",
+        model: "gemma4:e4b",
     },
 ];
 
@@ -589,7 +583,7 @@ mod tests {
         assert_eq!(tier_for_ram(15).model, MODEL_TIERS[0].model);
         assert_eq!(tier_for_ram(16).model, MODEL_TIERS[1].model);
         assert_eq!(tier_for_ram(24).model, MODEL_TIERS[1].model);
-        assert_eq!(tier_for_ram(64).model, MODEL_TIERS[2].model);
+        assert_eq!(tier_for_ram(64).model, MODEL_TIERS[1].model);
         assert_eq!(tier_for_ram(0).model, MODEL_TIERS[0].model);
     }
 

@@ -310,7 +310,7 @@ moved or changed meaning.
 
 ## `make eval-chat`: the grounded-chat scores
 
-Needs a model server (`ollama serve` + `ollama pull llama3.2`, or `B2_LLM_URL` /
+Needs a model server (`ollama serve` + `ollama pull gemma4:e2b`, or `B2_LLM_URL` /
 `B2_LLM_MODEL` at any OpenAI-compatible endpoint). Builds a throwaway vault from the
 retrieval eval's corpus (chat is scored over notes whose retrieval behavior is already
 characterized, so a surprise is attributable) and asks the labelled questions in

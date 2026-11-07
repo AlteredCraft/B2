@@ -55,9 +55,10 @@ pub fn probed_provider(config: LlmConfig) -> Result<Box<dyn LlmProvider>, LlmErr
 /// Ollama's OpenAI-compatible surface, the guided default (GH #151).
 pub const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
 
-/// The default chat model: a 3B-class model that runs on the smallest supported (8 GB)
-/// machine. Never downloaded by B2; an absent model is an error the adapters phrase (E4).
-pub const DEFAULT_MODEL: &str = "llama3.2";
+/// The default chat model: Gemma 4 E2B (about 2B active parameters), which runs on the
+/// smallest supported (8 GB) machine and cleared `make eval-chat` on every question. Never
+/// downloaded by B2; an absent model is an error the adapters phrase (E4).
+pub const DEFAULT_MODEL: &str = "gemma4:e2b";
 
 /// Environment variable naming the OpenAI-compatible base URL.
 pub const ENV_URL: &str = "B2_LLM_URL";
@@ -114,7 +115,7 @@ pub enum ApiKeySource {
 pub struct LlmConfig {
     /// The OpenAI-compatible base URL, e.g. `http://localhost:11434/v1`.
     pub base_url: String,
-    /// The model id as the server names it, e.g. `llama3.2`.
+    /// The model id as the server names it, e.g. `gemma4:e2b`.
     pub model: String,
     /// Bearer token for a cloud endpoint; `None` for a local runtime.
     pub api_key: Option<String>,

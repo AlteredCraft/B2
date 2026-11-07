@@ -230,8 +230,8 @@ pub struct LlmArgs {
     #[arg(long = "llm-url", value_name = "URL")]
     pub llm_url: Option<String>,
     /// The chat model id, as the server names it
-    /// [env: B2_LLM_MODEL, default: llama3.2]. Pull it first, e.g. `ollama pull
-    /// llama3.2`.
+    /// [env: B2_LLM_MODEL, default: gemma4:e2b]. Pull it first, e.g. `ollama pull
+    /// gemma4:e2b`.
     #[arg(long = "llm-model", value_name = "MODEL")]
     pub llm_model: Option<String>,
 }
