@@ -98,7 +98,9 @@ it, or a `[[link]]` you write in the body yourself. Details:
 **Flow ④: grounded chat** (`chat.rs`, `Vault::ask`). `b2 ask`, `b2 chat`, and the desktop's
 chat pane stream an answer grounded in your notes: condense, retrieve (flow ② at 10
 passages), assemble the grounded prompt, stream (cancellable at token granularity), cite
-(`[n]` markers resolve to path + excerpt). Chat is a reader: nothing model-derived is stored,
+(`[n]` markers resolve to path + excerpt). The adapter may name a *focus* note, the one the
+user is looking at (`--note`; the desktop's open note): its passages lead the grounding and
+the prompt says so, so "this note" means it. Chat is a reader: nothing model-derived is stored,
 and swapping chat models is a config change, never a reindex. `b2 why` (the **Why?** on a
 Similar card) is the one tool-using turn: the model calls B2's read-only tools, bounded in
 rounds and in calls per reply (ADR-0022). Details: [index-engine.md §6](index-engine.md).

@@ -11,6 +11,8 @@ import {
   chatReady,
   chatStateOf,
   citationRowKey,
+  composerPlaceholder,
+  focusLine,
   modelDetail,
   pullCommand,
   retrievalNote,
@@ -46,7 +48,11 @@ export function chatPaneHtml(state: AppState, roving: string | null): string {
       } data-chat-new title="Start a new conversation — nothing here is saved">new</button>
     </div>`;
   // No composer until chat is ready: a disabled field is just another Tab stop.
-  return head + chatStageHtml(state, roving) + (chatReady(state) ? chatComposerHtml(state) : "");
+  return (
+    head +
+    chatStageHtml(state, roving) +
+    (chatReady(state) ? chatComposerHtml(state) : "")
+  );
 }
 
 /** The conversation, or the state that stands in for one (chosen by `chatStateOf`). */
@@ -103,7 +109,11 @@ function chatLogHtml(state: AppState, roving: string | null): string {
 
 /** One turn: the question as typed, or the answer — rendered through the sanitizing
  *  Markdown seam (E5) — with its citations as rows beneath it. */
-function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): string {
+function chatTurnHtml(
+  m: ChatMessage,
+  index: number,
+  roving: string | null,
+): string {
   const key = turnRowKey(index);
   const row = (cls: string, role: string, body: string): string =>
     `<div class="chat-turn ${cls}" role="treeitem" aria-level="1"${sideTab(
@@ -114,7 +124,11 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
       ${body}
     </div>`;
   if (m.role === "user") {
-    return row("chat-question", "You", `<div class="chat-text">${escapeHtml(m.text)}</div>`);
+    return row(
+      "chat-question",
+      "You",
+      `<div class="chat-text">${escapeHtml(m.text)}</div>`,
+    );
   }
   if (m.error !== undefined) {
     return row(
@@ -129,6 +143,8 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
   // Which B2 tools built the answer (a Why? turn). Model-chosen names, so escaped (E5).
   const line = toolsLine(m.tools);
   const used = line ? `<p class="chat-tools">${escapeHtml(line)}</p>` : "";
+  const focus = focusLine(m.focus);
+  const about = focus ? `<p class="chat-focus">${escapeHtml(focus)}</p>` : "";
   const cites = m.citations
     .map(
       (c) => `<button class="chat-cite" role="treeitem" aria-level="2"${sideTab(
@@ -147,7 +163,7 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
     row(
       "chat-answer",
       "B2",
-      `<div class="chat-text">${renderMarkdown(m.text)}</div>${stopped}${used}`,
+      `<div class="chat-text">${renderMarkdown(m.text)}</div>${stopped}${about}${used}`,
     ) + cites
   );
 }
@@ -161,7 +177,9 @@ function chatComposerHtml(state: AppState): string {
   const streaming = state.chatStreaming !== null;
   const note = retrievalNote(state);
   return `<form class="chat-composer" id="chat-composer">
-      <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask your notes…"
+      <textarea id="chat-input" class="chat-input" rows="2" placeholder="${escapeHtml(
+        composerPlaceholder(state.current?.path ?? null),
+      )}"
         aria-label="Ask your notes"></textarea>
       <div class="chat-actions">
         ${
@@ -181,7 +199,10 @@ function chatComposerHtml(state: AppState): string {
  * Settings → Chat: no server, no model, or the Settings copy. A non-Ollama endpoint gets
  * only the message.
  */
-export function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean): string {
+export function chatSetupCardHtml(
+  setup: ChatSetup | null,
+  inSettings: boolean,
+): string {
   if (!setup) return "";
   const ollama = setup.ollama;
   const message = setup.message

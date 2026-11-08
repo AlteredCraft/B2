@@ -10,7 +10,9 @@ import {
   chatHistory,
   chatRows,
   citationRowKey,
+  composerPlaceholder,
   errorMessage,
+  focusLine,
   formatModelSize,
   modelDetail,
   pullCommand,
@@ -40,7 +42,11 @@ const setup = (over: Partial<ChatSetup> = {}): ChatSetup => ({
 const answered = (text: string, paths: string[]): ChatMessage =>
   answerMessage({
     answer: text,
-    citations: paths.map((path, i) => ({ marker: i + 1, path, excerpt: `from ${path}` })),
+    citations: paths.map((path, i) => ({
+      marker: i + 1,
+      path,
+      excerpt: `from ${path}`,
+    })),
     cancelled: false,
   });
 
@@ -48,7 +54,10 @@ const answered = (text: string, paths: string[]): ChatMessage =>
 function conversation(): ChatMessage[] {
   return [
     userMessage("what did I write about memory?"),
-    answered("Grounded in [1] and [2].", ["concepts/memory.md", "notes/spaced-repetition.md"]),
+    answered("Grounded in [1] and [2].", [
+      "concepts/memory.md",
+      "notes/spaced-repetition.md",
+    ]),
     userMessage("tell me more"),
     answered("More, per [1].", ["concepts/memory.md"]),
   ];
@@ -73,7 +82,10 @@ test("the transcript's rows are the turns, with citations nested under them", ()
 
 test("a streaming answer is a row too, so the keyboard can sit on it while it fills", () => {
   const rows = chatRows([userMessage("q")], true);
-  assert.deepEqual(rows.map((r) => r.key), [turnRowKey(0), STREAMING_ROW_KEY]);
+  assert.deepEqual(
+    rows.map((r) => r.key),
+    [turnRowKey(0), STREAMING_ROW_KEY],
+  );
   assert.equal(chatRows([userMessage("q")], false).length, 1);
 });
 
@@ -88,20 +100,32 @@ test("the pane walks with discovery's own arrows (K1) — one row order, both di
     visited.push(move.key);
     at = sideRowIndex(rows, move.key);
   }
-  assert.deepEqual(visited, rows.map((r) => r.key));
+  assert.deepEqual(
+    visited,
+    rows.map((r) => r.key),
+  );
 
   // ← from a citation steps out to its answer.
-  const cite = sideRowIndex(rows, citationRowKey(1, 2, "notes/spaced-repetition.md"));
+  const cite = sideRowIndex(
+    rows,
+    citationRowKey(1, 2, "notes/spaced-repetition.md"),
+  );
   assert.deepEqual(sideArrowMove(rows, cite, "side.row.out"), {
     kind: "focus",
     key: turnRowKey(1),
   });
   // → steps into a turn's first citation; with none it is spent.
-  assert.deepEqual(sideArrowMove(rows, sideRowIndex(rows, turnRowKey(1)), "side.row.in"), {
-    kind: "focus",
-    key: citationRowKey(1, 1, "concepts/memory.md"),
-  });
-  assert.equal(sideArrowMove(rows, sideRowIndex(rows, turnRowKey(0)), "side.row.in"), null);
+  assert.deepEqual(
+    sideArrowMove(rows, sideRowIndex(rows, turnRowKey(1)), "side.row.in"),
+    {
+      kind: "focus",
+      key: citationRowKey(1, 1, "concepts/memory.md"),
+    },
+  );
+  assert.equal(
+    sideArrowMove(rows, sideRowIndex(rows, turnRowKey(0)), "side.row.in"),
+    null,
+  );
 
   // The roving tabstop lands on the remembered row, or the first when that row is gone.
   assert.equal(rovingSideKey(rows, turnRowKey(2)), turnRowKey(2));
@@ -110,7 +134,11 @@ test("the pane walks with discovery's own arrows (K1) — one row order, both di
 });
 
 test("history carries what was actually said — a stopped answer included, a failure not", () => {
-  const stopped = answerMessage({ answer: "Half an ans", citations: [], cancelled: true });
+  const stopped = answerMessage({
+    answer: "Half an ans",
+    citations: [],
+    cancelled: true,
+  });
   const messages = [
     userMessage("first"),
     stopped,
@@ -136,25 +164,43 @@ test("the empty state is chosen once, from the vault and the probe", () => {
     "no-server",
   );
   assert.equal(
-    chatEmptyState({ hasVault: true, setup: setup({ state: "model_missing" }) }),
+    chatEmptyState({
+      hasVault: true,
+      setup: setup({ state: "model_missing" }),
+    }),
     "no-model",
   );
   assert.equal(chatEmptyState({ hasVault: true, setup: setup() }), "ready");
-  assert.equal(chatEmptyState({ hasVault: true, setup: setup({ state: "fake" }) }), "ready");
+  assert.equal(
+    chatEmptyState({ hasVault: true, setup: setup({ state: "fake" }) }),
+    "ready",
+  );
 });
 
 test("the app asks the same question off its own state", () => {
-  assert.equal(chatStateOf({ vaultRoot: null, chatSetup: setup() }), "no-vault");
+  assert.equal(
+    chatStateOf({ vaultRoot: null, chatSetup: setup() }),
+    "no-vault",
+  );
   assert.equal(chatStateOf({ vaultRoot: "/v", chatSetup: null }), "loading");
   assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup() }), true);
-  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "fake" }) }), true);
-  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "unreachable" }) }), false);
+  assert.equal(
+    chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "fake" }) }),
+    true,
+  );
+  assert.equal(
+    chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "unreachable" }) }),
+    false,
+  );
   assert.equal(chatReady({ vaultRoot: null, chatSetup: setup() }), false);
 });
 
 test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
   // Nothing indexed: the tree's empty state covers it.
-  assert.equal(retrievalNote({ semantic: true, notesEmbedded: 0, notesTotal: 0 }), "");
+  assert.equal(
+    retrievalNote({ semantic: true, notesEmbedded: 0, notesTotal: 0 }),
+    "",
+  );
   assert.match(
     retrievalNote({ semantic: false, notesEmbedded: 0, notesTotal: 12 }),
     /keyword search only/,
@@ -165,7 +211,11 @@ test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
   );
   // Partly embedded: not phrased as work in flight, since the gap outlives a cancelled
   // reindex.
-  const partial = retrievalNote({ semantic: true, notesEmbedded: 7, notesTotal: 12 });
+  const partial = retrievalNote({
+    semantic: true,
+    notesEmbedded: 7,
+    notesTotal: 12,
+  });
   assert.match(partial, /Keyword-first grounding/);
   assert.match(partial, /7\/12/);
   assert.match(partial, /Reindex/);
@@ -174,7 +224,10 @@ test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
     /while this vault embeds|embedding now|in progress/,
     "the note must not claim a run is under way when none may be",
   );
-  assert.equal(retrievalNote({ semantic: true, notesEmbedded: 12, notesTotal: 12 }), "");
+  assert.equal(
+    retrievalNote({ semantic: true, notesEmbedded: 12, notesTotal: 12 }),
+    "",
+  );
 });
 
 test("a why-question names both notes, by title where there is one", () => {
@@ -200,14 +253,24 @@ test("an answer says which B2 tools it was built from", () => {
     tools: [
       { name: "b2_passage_pairs", arguments: "{}", seeded: false },
       { name: "b2_read", arguments: '{"note":"a.md"}', seeded: false },
-      { name: "b2_read", arguments: '{"note":"a.md","offset":4}', seeded: false },
+      {
+        name: "b2_read",
+        arguments: '{"note":"a.md","offset":4}',
+        seeded: false,
+      },
     ],
   };
   assert.deepEqual(answerMessage(view).tools, view.tools);
   // Each tool once, in first-use order.
-  assert.equal(toolsLine(view.tools), "Looked up with B2 tools: passage pairs, read");
+  assert.equal(
+    toolsLine(view.tools),
+    "Looked up with B2 tools: passage pairs, read",
+  );
   // A plain ask: the host omits the field.
-  assert.deepEqual(answerMessage({ answer: "x", citations: [], cancelled: false }).tools, []);
+  assert.deepEqual(
+    answerMessage({ answer: "x", citations: [], cancelled: false }).tools,
+    [],
+  );
   assert.equal(toolsLine([]), "");
   // Model output is shown as it came; the paint escapes it.
   assert.equal(
@@ -231,7 +294,9 @@ test("the tool-call cap field is untouched, cleared, set, or refused — before 
     assert.ok("error" in verdict, `${bad} should be refused`);
     assert.match(verdict.error, /1 to 4096/);
   }
-  assert.ok("error" in toolCapInput("200", { in_force: 64, default: 64, ceiling: 100 }));
+  assert.ok(
+    "error" in toolCapInput("200", { in_force: 64, default: 64, ceiling: 100 }),
+  );
 });
 
 test("the pull command is spelled in one place", () => {
@@ -246,8 +311,53 @@ test("a model's size reads as an inventory line", () => {
 });
 
 test("an installed model's detail is its parameters and size, whichever it has", () => {
-  assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: "3.2B" }), "3.2B · 1.9 GB");
-  assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: null }), "1.9 GB");
+  assert.equal(
+    modelDetail({ name: "m", size: 2_019_393_189, parameters: "3.2B" }),
+    "3.2B · 1.9 GB",
+  );
+  assert.equal(
+    modelDetail({ name: "m", size: 2_019_393_189, parameters: null }),
+    "1.9 GB",
+  );
   assert.equal(modelDetail({ name: "m", size: 0, parameters: "3.2B" }), "3.2B");
   assert.equal(modelDetail({ name: "m", size: 0, parameters: null }), "");
+});
+
+test("a focused answer says which note it was about, and whether all of it was used (GH #253)", () => {
+  const whole = {
+    path: "Toy Projects/ForgeOS.md",
+    passages_shown: 3,
+    passages_total: 3,
+  };
+  const view = {
+    answer: "Tidied [1].",
+    citations: [],
+    cancelled: false,
+    focus: whole,
+  };
+  assert.deepEqual(answerMessage(view).focus, whole);
+  assert.equal(focusLine(whole), "About Toy Projects/ForgeOS.md");
+  // Loud about the cap: a trimmed note must not read as the whole note.
+  assert.equal(
+    focusLine({ ...whole, passages_shown: 24, passages_total: 40 }),
+    "About Toy Projects/ForgeOS.md — only the first 24 of its 40 passages were used",
+  );
+  // An unfocused answer: the host omits the field, the line is absent.
+  assert.equal(
+    answerMessage({ answer: "x", citations: [], cancelled: false }).focus,
+    undefined,
+  );
+  assert.equal(focusLine(undefined), "");
+});
+
+test("the composer says what the next question will be about", () => {
+  assert.equal(composerPlaceholder(null), "Ask your notes…");
+  assert.equal(
+    composerPlaceholder("Toy Projects/Desktop Appliances/ForgeOS.md"),
+    "Ask about ForgeOS…",
+  );
+  assert.equal(
+    composerPlaceholder("daily/2026-11-08.md"),
+    "Ask about 2026-11-08…",
+  );
 });

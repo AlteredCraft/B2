@@ -1718,3 +1718,55 @@ fn the_llm_url_environment_variable_is_used_when_no_flag_is_given() {
         stderr(&out)
     );
 }
+
+/// `ask --note` (GH #253): the named note's passages lead the numbering and the answer
+/// says which note it was about, so "this doc" questions ground in the open note even
+/// when retrieval alone would find nothing.
+#[test]
+fn ask_about_a_note_cites_it_first_and_names_it() {
+    let (_g, root) = reindexed();
+
+    let out = run_chat(
+        &root,
+        &[
+            "--json",
+            "ask",
+            "--note",
+            "notes/spaced-repetition.md",
+            "can you clean up this doc for me",
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let last = events(&out).pop().expect("answer event");
+    assert_eq!(last["event"], "answer");
+    assert_eq!(last["focus"]["path"], "notes/spaced-repetition.md");
+    assert_eq!(
+        last["focus"]["passages_shown"],
+        last["focus"]["passages_total"]
+    );
+    let first = &last["citations"][0];
+    assert_eq!(
+        (first["marker"].as_u64(), first["path"].as_str()),
+        (Some(1), Some("notes/spaced-repetition.md"))
+    );
+
+    // The human form names the note; without `--note` it says nothing about one.
+    let out = run_chat(
+        &root,
+        &["ask", "--note", "notes/spaced-repetition.md", "tidy this"],
+        None,
+    );
+    assert!(
+        stdout(&out).contains("About: notes/spaced-repetition.md"),
+        "{}",
+        stdout(&out)
+    );
+    let out = run_chat(&root, &["ask", "what is memory?"], None);
+    assert!(!stdout(&out).contains("About:"), "{}", stdout(&out));
+
+    // An unknown note is an error, not a quietly unfocused answer.
+    let out = run_chat(&root, &["ask", "--note", "nope.md", "x"], None);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("nope.md"), "{}", stderr(&out));
+}

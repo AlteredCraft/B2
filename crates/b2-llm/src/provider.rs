@@ -448,6 +448,7 @@ mod tests {
                 heading_path: None,
                 text: "the passage".into(),
             }],
+            None,
         );
         let wire = WireRequest::from_chat("llama3.2", &req);
         assert!(wire.stream, "streaming is the contract");
@@ -463,7 +464,7 @@ mod tests {
 
     #[test]
     fn a_plain_ask_sends_no_tools_key_at_all() {
-        let req = b2_core::chat::build_request("q", &[], Vec::new());
+        let req = b2_core::chat::build_request("q", &[], Vec::new(), None);
         let body = serde_json::to_string(&WireRequest::from_chat("llama3.2", &req)).unwrap();
         assert!(!body.contains("tools"), "{body}");
         assert!(!body.contains("tool_call"), "{body}");

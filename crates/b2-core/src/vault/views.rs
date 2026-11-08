@@ -263,6 +263,20 @@ pub struct AnswerView {
     /// The B2 tools that ran, in order; empty for a plain [`ask`](Vault::ask).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolUseView>,
+    /// The note the question was asked about, when the caller named one (GH #253).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus: Option<FocusView>,
+}
+
+/// What a focused [`ask`](Vault::ask) told the model about the open note: which note, and
+/// how much of it. `passages_shown < passages_total` means the cap
+/// ([`chat::FOCUS_PASSAGES`](crate::chat::FOCUS_PASSAGES)) trimmed it, and the surface
+/// should say so rather than let the answer pass as whole-note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FocusView {
+    pub path: String,
+    pub passages_shown: usize,
+    pub passages_total: usize,
 }
 
 /// One tool run during a chat turn, shown beside the answer.

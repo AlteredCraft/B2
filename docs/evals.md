@@ -316,7 +316,9 @@ retrieval eval's corpus (chat is scored over notes whose retrieval behavior is a
 characterized, so a surprise is attributable) and asks the labelled questions in
 [`questions.json`](../crates/b2-llm/evals/questions.json) through the real `Vault::ask`.
 Unlike `queries.json`, questions do **not** avoid the target's vocabulary: this scores what
-the model does with retrieved passages, not what retrieval finds.
+the model does with retrieved passages, not what retrieval finds. An entry with `focus` is
+asked about that note, as the desktop asks when it is open ([#253](https://github.com/AlteredCraft/B2/issues/253)):
+"this note" questions that retrieval alone cannot ground.
 
 Four deliberately separable scores, because a bad answer has more than one possible author:
 

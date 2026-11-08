@@ -94,16 +94,19 @@ export const api = {
    * A resource's bytes, base64, for the in-app viewer. Copies the whole file across the IPC,
    * so ask only for what will be displayed (the size is on `explainResource`'s view).
    */
-  readResource: (path: string): Promise<string> => invoke("read_resource", { path }),
+  readResource: (path: string): Promise<string> =>
+    invoke("read_resource", { path }),
 
   /** *Open in system default*, host-side (the webview holds no opener permission). */
-  openResource: (path: string): Promise<void> => invoke("open_resource", { path }),
+  openResource: (path: string): Promise<void> =>
+    invoke("open_resource", { path }),
 
   /**
    * Open a web link from inside a note in the default browser. `links.ts` decides what is
    * routed here; the host re-checks the scheme (http / https / mailto) and decides what opens.
    */
-  openExternal: (url: string): Promise<void> => invoke("open_external", { url }),
+  openExternal: (url: string): Promise<void> =>
+    invoke("open_external", { url }),
 
   /**
    * The clipboard's plain text, for ⌘⇧V. Host-side: WebKit gates a programmatic
@@ -117,7 +120,11 @@ export const api = {
 
   /** Explain one Similar card (GH #236). `limit` is the pane's `similar` limit, so the
    *  rank matches the card's. */
-  explainSimilar: (anchor: string, candidate: string, limit: number): Promise<SimilarExplainView> =>
+  explainSimilar: (
+    anchor: string,
+    candidate: string,
+    limit: number,
+  ): Promise<SimilarExplainView> =>
     invoke("explain_similar", { anchor, candidate, limit }),
 
   /** Hybrid search plus the query-level evidence verdict (invariants.md D2, GH #202). */
@@ -128,8 +135,11 @@ export const api = {
    * Save a note's body via `Vault::write`, guarded by the `revision` captured at read.
    * Rejects with `WRITE_CONFLICT_MESSAGE` if the file changed on disk since.
    */
-  writeNote: (note: string, body: string, baseRevision: string): Promise<WriteReport> =>
-    invoke("write_note", { note, body, baseRevision }),
+  writeNote: (
+    note: string,
+    body: string,
+    baseRevision: string,
+  ): Promise<WriteReport> => invoke("write_note", { note, body, baseRevision }),
 
   /**
    * Save a note's raw frontmatter YAML verbatim (GH #79), under the same `revision` guard.
@@ -139,23 +149,29 @@ export const api = {
     note: string,
     frontmatter: string,
     baseRevision: string,
-  ): Promise<WriteReport> => invoke("write_frontmatter", { note, frontmatter, baseRevision }),
+  ): Promise<WriteReport> =>
+    invoke("write_frontmatter", { note, frontmatter, baseRevision }),
 
   /**
    * Create an empty note (`.md` optional; missing parents created, like `b2 add`).
    * Model-free: vectors fill on the next embed pass.
    */
-  createNote: (path: string): Promise<AddReport> => invoke("create_note", { path }),
+  createNote: (path: string): Promise<AddReport> =>
+    invoke("create_note", { path }),
 
   /** Create a folder on disk (missing parents included, an occupied target refused). */
-  createDir: (dir: string): Promise<DirCreateReport> => invoke("create_dir", { dir }),
+  createDir: (dir: string): Promise<DirCreateReport> =>
+    invoke("create_dir", { dir }),
 
   /**
    * Import a dropped file's bytes into `dir` (`""` for the root). `data` is base64: a drop
    * arrives as content, not a path, and JSON IPC carries no byte array cheaply.
    */
-  importFile: (dir: string, name: string, data: string): Promise<ImportReport> =>
-    invoke("import_file", { dir, name, data }),
+  importFile: (
+    dir: string,
+    name: string,
+    data: string,
+  ): Promise<ImportReport> => invoke("import_file", { dir, name, data }),
 
   /** `importFile` from a path (the Import files… picker); the bytes never cross the IPC. */
   importPath: (dir: string, source: string): Promise<ImportReport> =>
@@ -180,15 +196,16 @@ export const api = {
     invoke("move_dir", { from, to }),
 
   /** Delete a note from disk. Inbound links dangle; they are never rewritten. */
-  deleteNote: (note: string): Promise<DeleteReport> => invoke("delete_note", { note }),
+  deleteNote: (note: string): Promise<DeleteReport> =>
+    invoke("delete_note", { note }),
 
   /** `deleteNote` for a resource. */
   deleteResource: (path: string): Promise<ResourceDeleteReport> =>
     invoke("delete_resource", { path }),
 
   /** Delete a whole folder and everything inside it (unindexed files go too). */
-  deleteDir: (dir: string): Promise<DirDeleteReport> => invoke("delete_dir", { dir }),
-
+  deleteDir: (dir: string): Promise<DirDeleteReport> =>
+    invoke("delete_dir", { dir }),
 
   /** A note's connections with their "why" (outbound + inbound). */
   explain: (note: string): Promise<ExplainView> => invoke("explain", { note }),
@@ -222,16 +239,18 @@ export const api = {
 
   /**
    * One grounded answer (flow ④, `Vault::ask`), streamed per token. `history` is the
-   * caller's and session-only (S4): nothing about a chat is stored.
+   * caller's and session-only (S4): nothing about a chat is stored. `focus` is the open
+   * note's path, or null: "this note" means it, and its passages lead the grounding.
    */
   ask: (
     question: string,
     history: ChatTurn[],
+    focus: string | null,
     onToken: (text: string) => void,
   ): Promise<AnswerView> => {
     const channel = new Channel<string>();
     channel.onmessage = onToken;
-    return invoke("ask", { question, history, onEvent: channel });
+    return invoke("ask", { question, history, focus, onEvent: channel });
   },
 
   /**
@@ -246,7 +265,12 @@ export const api = {
   ): Promise<AnswerView> => {
     const channel = new Channel<string>();
     channel.onmessage = onToken;
-    return invoke("why_similar", { anchor, candidate, limit, onEvent: channel });
+    return invoke("why_similar", {
+      anchor,
+      candidate,
+      limit,
+      onEvent: channel,
+    });
   },
 
   /**
@@ -282,7 +306,8 @@ export const api = {
    * Record the chosen embedding model. A different model takes effect only after it is
    * downloaded (`b2 init`) and the vault is reindexed.
    */
-  setModel: (model: string): Promise<ModelChoice[]> => invoke("set_model", { model }),
+  setModel: (model: string): Promise<ModelChoice[]> =>
+    invoke("set_model", { model }),
 
   /** The in-app `b2 init`: download and verify the selected model. Can take minutes. */
   provisionModel: (): Promise<ModelChoice[]> => invoke("provision_model"),

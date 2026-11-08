@@ -349,6 +349,16 @@ Sources:
 stops an answer mid-stream (the partial text stands), `/exit` leaves. The desktop app has the
 same thing as a chat pane (⌘J).
 
+Both take `--note PATH` to ask *about* one note: its passages are handed to the model first,
+the prompt says which note is open, and "this note" or "this doc" means it. The answer ends
+with `About: PATH`, and says so when only the first part of a long note fit. The desktop pane
+does this on its own with whatever note is open. Asking chat to clean up or rewrite a note
+gets you a proposed text in the answer; B2 never writes it into the note (W2).
+
+```console
+$ b2 ask --note notes/spaced-repetition.md "summarise this note in three bullets"
+```
+
 A reader, not a writer: chat stores nothing. No transcript, no cache, session-only history.
 Nothing about a chat is ever written to your notes or the index, and swapping chat models is
 a config change, never a reindex. The default endpoint is local; a cloud endpoint exists only
@@ -414,7 +424,9 @@ What the window adds over the terminal:
   centre (the `--explain` read, no model), and **Why?** asks chat to explain it with
   citations. There is also a graph view of the connections around the open note.
 - **Grounded chat is a pane (⌘J):** the same cited, streamed answers as `b2 ask`, with Esc to
-  stop a stream. The model endpoint and its Keychain-held key live in Settings.
+  stop a stream. The open note is what "this note" means: its passages lead the grounding,
+  the composer names it, and each answer says what it was about. The model endpoint and its
+  Keychain-held key live in Settings.
 - **An editor.** CodeMirror 6 with live-preview Markdown, autosave, syntax-highlighted code
   fences, `[[wikilink]]` completion, and a conflict bar if the file changed under you. A
   frontmatter drawer edits the block on its own, body untouched.
@@ -452,8 +464,8 @@ your notes. Nothing locks you in.
 | `b2 write <note>` | Replace a note's body from stdin: the scripting/agent editing surface. Frontmatter is left alone | no |
 | `b2 mv <from> <to>` | Move/rename a note, file, or folder and repair every inbound link | re-embeds touched |
 | `b2 rm <target>` | Delete a note, file, or folder from the vault and disk (`-r` for a folder). Inbound links dangle and are surfaced, never rewritten | no |
-| `b2 ask <question>` | One grounded, cited, streamed answer from your notes. `--llm-url`, `--llm-model`; `--json` is a JSONL event stream | embeds query + model server |
-| `b2 chat` | Interactive grounded chat; session-only history, nothing stored. Ctrl-C stops an answer; `/exit` leaves | embeds query + model server |
+| `b2 ask <question>` | One grounded, cited, streamed answer from your notes. `--note PATH` asks about one note (its passages first; "this note" means it). `--llm-url`, `--llm-model`; `--json` is a JSONL event stream | embeds query + model server |
+| `b2 chat` | Interactive grounded chat; session-only history, nothing stored. `--note PATH` as `ask`. Ctrl-C stops an answer; `/exit` leaves | embeds query + model server |
 
 ## Config and environment
 

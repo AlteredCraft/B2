@@ -435,6 +435,7 @@ and their justification is re-derived on every `make eval` run (ADR-0013).
 | note hit pool | 3 × limit | note-view headroom (dedup + torn reads) | `vault.rs` |
 | chunk hit pool | limit + 2 | passage-view headroom (torn reads only) | `vault.rs` |
 | `ASK_PASSAGES` | 10 | chat's retrieve depth (flow ④ reads this flow) | `chat.rs` |
+| `FOCUS_PASSAGES` | 24 | how much of the focus note a focused ask hands over, from the top (GH #253) | `chat.rs` |
 | `SHORTLIST_PER_RESULT` | 20 | discovery stage-1 width per asked result | `discover.rs` |
 | `SHORTLIST_MIN` | 200 | discovery stage-1 floor | `discover.rs` |
 | `EXCLUDE_HOPS` | 1 | discovery's already-connected radius | `discover.rs` |
@@ -528,14 +529,24 @@ Chat is a *reader* of this index and adds nothing to it (M1): no table, no cache
 no `meta` row, session-only history (S4). That is the deliberate contrast with the embedder:
 swapping chat models never touches the index, so a provider swap is a URL or config change.
 
-`Vault::ask` (`chat.rs`) is five steps:
+`Vault::ask` (`chat.rs`) is five steps, with an optional *focus* note threaded through
+(GH #253): the note the user is looking at, named by the adapter as a path (`b2 ask --note`;
+the desktop passes the open note). An unknown focus is `NoteNotFound`, never a quietly
+unfocused answer.
 
+0. **Focus** (when named). The note's own passages, in order from the top, capped at
+   `FOCUS_PASSAGES = 24`, become passages `[1]..[k]`. The answer's `focus` field reports
+   `passages_shown` of `passages_total`, and every surface says so when the cap trimmed:
+   a part must not pass as the whole.
 1. **Condense** (multi-turn only). A provider call rewrites the follow-up into a standalone
    query. On failure it degrades to the raw question, so this step can never break chat.
+   With a focus, the condense prompt names the note, so "it" can mean the note.
 2. **Retrieve.** `search_chunks` at `ASK_PASSAGES = 10`: the §4 pipeline unchanged, BM25-only
-   fallback included.
-3. **Assemble.** The grounded system prompt plus numbered passages. Prompt assembly is core
-   logic, not an adapter's.
+   fallback included. Hits on the focus note are dropped (it is already numbered).
+3. **Assemble.** The grounded system prompt plus numbered passages. With a focus, one more
+   paragraph: which note is open, which markers are its text, and whether that is all of
+   it. Without one the prompt is byte-identical to before. Prompt assembly is core logic,
+   not an adapter's.
 4. **Stream.** Tokens flow up through the caller's callback, whose return value cancels at
    token granularity. Sync, no runtime.
 5. **Cite.** `[n]` markers resolve to `(path, excerpt)` in the returned `AnswerView`. A

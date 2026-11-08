@@ -10,6 +10,7 @@
 use crate::llm::{
     ChatRequest, ChatTurn, ContextPassage, LlmProvider, RequestKind, ToolExchange, ToolSpec,
 };
+use crate::vault::FocusView;
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
@@ -30,13 +31,58 @@ pub const CONDENSE_SYSTEM_PROMPT: &str = "Rewrite the user's latest message as o
 search query that names its subject explicitly, using the earlier conversation to fill in \
 any pronouns or references. Reply with the query text only — no preamble, no quotes.";
 
+/// How many of the focus note's own passages a focused ask hands over, in order from the
+/// top (GH #253). About 40k characters of note at the default chunking; past it the
+/// answer's [`FocusView`] reports the trim and the surface says so.
+pub const FOCUS_PASSAGES: usize = 24;
+
+/// The condensation prompt, told which note is open so a follow-up's "it" or "this" can
+/// resolve to the note and not only to the earlier turns. [`CONDENSE_SYSTEM_PROMPT`]
+/// verbatim without a focus.
+pub fn condense_system_prompt(focus: Option<&str>) -> String {
+    match focus {
+        None => CONDENSE_SYSTEM_PROMPT.to_string(),
+        Some(path) => format!(
+            "{CONDENSE_SYSTEM_PROMPT} The user is currently viewing the note \"{path}\"; \
+             \"this note\", \"this doc\" and the like refer to it."
+        ),
+    }
+}
+
+/// The grounded prompt's focus paragraph: which note is open, where its passages sit in
+/// the numbering, and whether the cap trimmed it.
+fn focus_paragraph(focus: &FocusView) -> String {
+    let mut out = format!(
+        "The user is currently viewing the note \"{}\". \"This note\", \"this doc\" and the \
+         like refer to it.",
+        focus.path
+    );
+    match focus.passages_shown {
+        0 => out.push_str(" None of its text is indexed yet, so you have no passages from it."),
+        1 => out.push_str(" Passage [1] is its text."),
+        n => out.push_str(&format!(" Passages [1] to [{n}] are its text, in order.")),
+    }
+    if focus.passages_shown < focus.passages_total {
+        out.push_str(&format!(
+            " That is only the first {} of {} passages; say so if the request needs the rest.",
+            focus.passages_shown, focus.passages_total
+        ));
+    }
+    out
+}
+
 /// Step 0: condense a follow-up into a standalone retrieval query (multi-turn only).
 /// Never breaks chat: any failure or blank reply degrades to the raw question. Nothing
 /// streams up.
-pub fn condense_query(llm: &dyn LlmProvider, question: &str, history: &[ChatTurn]) -> String {
+pub fn condense_query(
+    llm: &dyn LlmProvider,
+    question: &str,
+    history: &[ChatTurn],
+    focus: Option<&str>,
+) -> String {
     let req = ChatRequest {
         kind: RequestKind::Condense,
-        system: CONDENSE_SYSTEM_PROMPT.to_string(),
+        system: condense_system_prompt(focus),
         turns: turns_with_question(history, question),
         passages: Vec::new(),
         tools: Vec::new(),
@@ -62,15 +108,21 @@ pub fn condense_query(llm: &dyn LlmProvider, question: &str, history: &[ChatTurn
     }
 }
 
-/// Step 2: assemble the grounded chat request.
+/// Step 2: assemble the grounded chat request. With a `focus`, the prompt names the open
+/// note and where its passages sit; the caller has already put them first.
 pub fn build_request(
     question: &str,
     history: &[ChatTurn],
     passages: Vec<ContextPassage>,
+    focus: Option<&FocusView>,
 ) -> ChatRequest {
+    let system = match focus {
+        None => GROUNDED_SYSTEM_PROMPT.to_string(),
+        Some(f) => format!("{GROUNDED_SYSTEM_PROMPT}\n\n{}", focus_paragraph(f)),
+    };
     ChatRequest {
         kind: RequestKind::Chat,
-        system: GROUNDED_SYSTEM_PROMPT.to_string(),
+        system,
         turns: turns_with_question(history, question),
         passages,
         tools: Vec::new(),

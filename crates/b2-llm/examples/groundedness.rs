@@ -45,6 +45,10 @@ struct Question {
     /// correct.
     #[serde(default)]
     expect: Vec<String>,
+    /// The note the question is asked "about" (`Vault::ask`'s focus, GH #253): a
+    /// "this note" question, whose passages reach the model without retrieval.
+    #[serde(default)]
+    focus: Option<String>,
 }
 
 impl Question {
@@ -146,12 +150,14 @@ fn run() -> Result<bool, Box<dyn Error>> {
 fn ask_one(vault: &Vault, llm: &dyn LlmProvider, q: &Question) -> Result<Scored, Box<dyn Error>> {
     // A single-turn `Vault::ask` retrieves exactly this passage set (no condensation).
     let passages = vault.search_chunks(&q.question, ASK_PASSAGES)?;
-    let retrieval_hit = passages.iter().any(|p| q.expect.contains(&p.path));
+    // A focused note reaches the model whether or not retrieval found it.
+    let retrieval_hit = passages.iter().any(|p| q.expect.contains(&p.path))
+        || q.focus.as_ref().is_some_and(|f| q.expect.contains(f));
 
     let started = Instant::now();
     let mut tokens = 0usize;
     let mut first_token: Option<u128> = None;
-    let answer = vault.ask(llm, &q.question, &[], &mut |_| {
+    let answer = vault.ask(llm, &q.question, &[], q.focus.as_deref(), &mut |_| {
         tokens += 1;
         first_token.get_or_insert_with(|| started.elapsed().as_millis());
         ControlFlow::Continue(())

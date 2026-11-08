@@ -1587,7 +1587,8 @@ body.is-resizing {
 }
 
 /* Which B2 tools an answer was built from — a quiet provenance line under it. */
-.chat-tools {
+.chat-tools,
+.chat-focus {
   color: var(--muted);
   font-size: 12px;
   margin: 6px 0 0;

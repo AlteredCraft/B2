@@ -7,11 +7,7 @@ import { autocompletion } from "@codemirror/autocomplete";
 import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting } from "@codemirror/language";
-import {
-  Compartment,
-  StateEffect,
-  type Extension,
-} from "@codemirror/state";
+import { Compartment, StateEffect, type Extension } from "@codemirror/state";
 import {
   EditorView,
   type KeyBinding,
@@ -52,7 +48,13 @@ import {
   visibleRows,
   type TreeRow,
 } from "./treenav";
-import { cardRowKey, sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
+import {
+  cardRowKey,
+  sideArrowMove,
+  sideNavFor,
+  sideRowIndex,
+  sideRows,
+} from "./sidenav";
 import {
   answerMessage,
   chatHistory,
@@ -75,7 +77,12 @@ import { reindexMeterHtml } from "./widgets";
 import { isThemePref, loadThemePref, saveThemePref, themeAttr } from "./theme";
 import { loadReminderOptOut, saveReminderOptOut } from "./embedreminder";
 import { externalUrl, isInPageAnchor } from "./links";
-import { embedImagesField, livePreview, setEmbedImages, wikilink } from "./livepreview";
+import {
+  embedImagesField,
+  livePreview,
+  setEmbedImages,
+  wikilink,
+} from "./livepreview";
 import {
   imageDataUrl,
   imageEmbedTargets,
@@ -128,7 +135,15 @@ import {
 } from "./editorcmds";
 import { icon } from "./icons";
 import { editDoneTitle, shellHints } from "./hints";
-import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
+import {
+  activeAfter,
+  countLabel,
+  FIND_CAP,
+  findMatches,
+  locate,
+  stepActive,
+  type Match,
+} from "./findbar";
 import { findField, setFindEffect } from "./findfield";
 import { BOUNDS, initPanes, visiblePanes } from "./panes";
 import {
@@ -177,7 +192,8 @@ function el(id: string): HTMLElement {
  */
 function capturePaneFocus(pane: HTMLElement): (() => void) | null {
   const active = document.activeElement;
-  if (!(active instanceof HTMLElement || active instanceof SVGElement)) return null;
+  if (!(active instanceof HTMLElement || active instanceof SVGElement))
+    return null;
   if (!pane.contains(active)) return null;
   const row = active.closest<HTMLElement>("[data-side-row]");
   if (row) {
@@ -203,7 +219,8 @@ function capturePaneFocus(pane: HTMLElement): (() => void) | null {
  */
 function captureModalFocus(root: HTMLElement): (() => void) | null {
   const active = document.activeElement;
-  if (!(active instanceof HTMLElement) || !root.contains(active) || !active.id) return null;
+  if (!(active instanceof HTMLElement) || !root.contains(active) || !active.id)
+    return null;
   const id = active.id;
   // Carry the focused field's uncommitted value (typed text, or an unsaved `<select>`
   // choice) across a repaint the user didn't cause, e.g. a chat probe landing. Only the
@@ -214,7 +231,8 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
     active instanceof HTMLSelectElement
       ? {
           value: active.value,
-          start: active instanceof HTMLSelectElement ? null : active.selectionStart,
+          start:
+            active instanceof HTMLSelectElement ? null : active.selectionStart,
           end: active instanceof HTMLSelectElement ? null : active.selectionEnd,
         }
       : null;
@@ -225,7 +243,8 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
     if (
       typed &&
       target === back &&
-      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+      (target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement)
     ) {
       target.value = typed.value;
       // `selectionStart` is null on inputs without selection (`type="number"`).
@@ -237,7 +256,9 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
     // Only a choice the list still offers: an absent value would set it to `""`, which
     // saves as "no model".
     if (typed && target === back && target instanceof HTMLSelectElement) {
-      const offered = Array.from(target.options).some((o) => o.value === typed.value);
+      const offered = Array.from(target.options).some(
+        (o) => o.value === typed.value,
+      );
       if (offered) target.value = typed.value;
     }
     target?.focus();
@@ -272,28 +293,46 @@ function paintTree(): void {
   const carry = (id: string, open: boolean, selectAllOnFresh: boolean) => {
     const prev = document.getElementById(id) as HTMLInputElement | null;
     const saved =
-      prev && open ? { value: prev.value, start: prev.selectionStart, end: prev.selectionEnd } : null;
+      prev && open
+        ? {
+            value: prev.value,
+            start: prev.selectionStart,
+            end: prev.selectionEnd,
+          }
+        : null;
     return () => {
       const input = document.getElementById(id) as HTMLInputElement | null;
       if (!input) return;
       if (saved) {
         input.value = saved.value;
-        input.setSelectionRange(saved.start ?? saved.value.length, saved.end ?? saved.value.length);
+        input.setSelectionRange(
+          saved.start ?? saved.value.length,
+          saved.end ?? saved.value.length,
+        );
       } else if (selectAllOnFresh) {
         input.select();
       }
       input.focus();
     };
   };
-  const restoreCreate = carry("tree-create-input", state.treeCreate !== null, false);
-  const restoreRename = carry("tree-rename-input", state.treeRename !== null, true);
+  const restoreCreate = carry(
+    "tree-create-input",
+    state.treeCreate !== null,
+    false,
+  );
+  const restoreRename = carry(
+    "tree-rename-input",
+    state.treeRename !== null,
+    true,
+  );
   // Keep a keyboard user in the tree across the swap (K1), restored by path.
   const hadRowFocus = focusedTreeRow() !== null;
   el("tree-pane").innerHTML = html;
   lastTreePaneHtml = html;
   restoreCreate();
   restoreRename();
-  if (hadRowFocus && !state.treeCreate && !state.treeRename) rovingRowEl()?.focus();
+  if (hadRowFocus && !state.treeCreate && !state.treeRename)
+    rovingRowEl()?.focus();
 }
 
 // The side pane's memo: identical HTML skips the swap, so scroll survives. Focus is carried
@@ -314,11 +353,19 @@ function paintSide(): void {
 
 /** The chat composer's value and caret, as a restore thunk (a no-op when empty). */
 function captureChatInput(): () => void {
-  const prev = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+  const prev = document.getElementById(
+    "chat-input",
+  ) as HTMLTextAreaElement | null;
   if (!prev || prev.value === "") return () => {};
-  const saved = { value: prev.value, start: prev.selectionStart, end: prev.selectionEnd };
+  const saved = {
+    value: prev.value,
+    start: prev.selectionStart,
+    end: prev.selectionEnd,
+  };
   return () => {
-    const next = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+    const next = document.getElementById(
+      "chat-input",
+    ) as HTMLTextAreaElement | null;
     if (!next) return;
     next.value = saved.value;
     next.setSelectionRange(saved.start, saved.end);
@@ -350,7 +397,10 @@ function render(): void {
   // Graph mode owns the pane's box (no padding or scroll; the stage flexes to fill).
   el("note-pane").classList.toggle(
     "is-graph",
-    state.graphOpen && !state.editing && state.current !== null && state.currentResource === null,
+    state.graphOpen &&
+      !state.editing &&
+      state.current !== null &&
+      state.currentResource === null,
   );
   paintSide();
   // The "install the model" banner; empty (collapsed) when embedreminder.ts says not to.
@@ -377,7 +427,8 @@ function render(): void {
   syncFind(noteSwapped);
   if (noteSwapped) void paintCodeHighlights();
   // The open note's `![[image.png]]` embeds; while editing, `scheduleImageScan` owns this.
-  if (!state.editing) void syncNoteImages(state.current?.path ?? null, state.current?.body ?? "");
+  if (!state.editing)
+    void syncNoteImages(state.current?.path ?? null, state.current?.body ?? "");
 }
 
 /** Reading-view syntax highlighting (highlight.ts), a post-render pass. Grammars load
@@ -399,14 +450,18 @@ function paintReindex(): void {
     btn.textContent = reindexLabel(state);
   }
 
-  const meters = [...document.querySelectorAll<HTMLElement>(".reindex-progress")];
+  const meters = [
+    ...document.querySelectorAll<HTMLElement>(".reindex-progress"),
+  ];
   for (const wrap of meters) wrap.hidden = !state.reindexing;
   if (!state.reindexing) return;
 
   // Determinate only once embedding has a known denominator; before that the bar sweeps.
   const p = state.reindexProgress;
   const embedding = p && p.notes_to_embed > 0 ? p : null;
-  const done = embedding ? `${embedding.notes_embedded}/${embedding.notes_to_embed}` : "";
+  const done = embedding
+    ? `${embedding.notes_embedded}/${embedding.notes_to_embed}`
+    : "";
   const label = state.reindexCancelling
     ? "Cancelling…"
     : embedding
@@ -428,10 +483,14 @@ function paintReindex(): void {
     }
     const text = wrap.querySelector<HTMLElement>(".reindex-label");
     if (text) text.textContent = label;
-    const cancelBtn = wrap.querySelector<HTMLButtonElement>("[data-cancel-reindex]");
+    const cancelBtn = wrap.querySelector<HTMLButtonElement>(
+      "[data-cancel-reindex]",
+    );
     if (cancelBtn) {
       cancelBtn.disabled = state.reindexCancelling;
-      cancelBtn.textContent = state.reindexCancelling ? "Cancelling…" : "Cancel";
+      cancelBtn.textContent = state.reindexCancelling
+        ? "Cancelling…"
+        : "Cancel";
     }
   }
 }
@@ -479,7 +538,10 @@ async function loadNotes(): Promise<boolean> {
  * updates history with the canonical path as soon as the read succeeds, before discovery,
  * so rapid navigations stay ordered. Resolves false on a failed read (already toasted).
  */
-async function loadNote(ref: string, commit: (path: string) => void): Promise<boolean> {
+async function loadNote(
+  ref: string,
+  commit: (path: string) => void,
+): Promise<boolean> {
   state.loading = true;
   render();
   try {
@@ -542,7 +604,10 @@ function adoptExplain(explain: ExplainView): void {
 
 /** Put a resource card and its picture in the pane together, so the card never shows
  *  another file's picture. */
-function adoptResource(resource: ResourceExplainView, picture: string | null): void {
+function adoptResource(
+  resource: ResourceExplainView,
+  picture: string | null,
+): void {
   state.currentResource = resource;
   state.resourceImage = picture;
 }
@@ -570,7 +635,9 @@ async function followWikilink(target: string): Promise<void> {
  * read failed. A failed read still shows the card (with *Open in system default*) rather
  * than failing the navigation.
  */
-async function loadResourceImage(r: ResourceExplainView): Promise<string | null> {
+async function loadResourceImage(
+  r: ResourceExplainView,
+): Promise<string | null> {
   if (r.class !== "image" || r.size > IMAGE_VIEWER_MAX_BYTES) return null;
   try {
     return imageDataUrl(r.path, await api.readResource(r.path));
@@ -600,7 +667,9 @@ const IMAGE_SCAN_MS = 400;
 /** Hand the live editor the pictures the note holds now (a no-op when not editing). */
 function pushNoteImages(): void {
   // A copy: editor state must not change under CodeMirror without a transaction.
-  editorView?.dispatch({ effects: setEmbedImages.of(new Map(state.embedImages)) });
+  editorView?.dispatch({
+    effects: setEmbedImages.of(new Map(state.embedImages)),
+  });
 }
 
 /**
@@ -608,13 +677,24 @@ function pushNoteImages(): void {
  * `owner` drops every picture. Repaints only after a picture arrives, so it is safe from
  * the tail of `render()`.
  */
-async function syncNoteImages(owner: string | null, body: string): Promise<void> {
-  if (imagesOwner === owner && imagesBody === body && imagesInventory === state.resources) return;
+async function syncNoteImages(
+  owner: string | null,
+  body: string,
+): Promise<void> {
+  if (
+    imagesOwner === owner &&
+    imagesBody === body &&
+    imagesInventory === state.resources
+  )
+    return;
   imagesOwner = owner;
   imagesBody = owner === null ? null : body;
   imagesInventory = state.resources;
   const generation = ++imagesGeneration;
-  const plan = owner === null ? [] : inlineImagePlan(imageEmbedTargets(body), state.resources);
+  const plan =
+    owner === null
+      ? []
+      : inlineImagePlan(imageEmbedTargets(body), state.resources);
   const keep = new Set(plan);
   for (const path of [...state.embedImages.keys()]) {
     if (!keep.has(path)) state.embedImages.delete(path);
@@ -625,7 +705,10 @@ async function syncNoteImages(owner: string | null, body: string): Promise<void>
   const loaded = await Promise.all(
     missing.map(async (path) => {
       try {
-        return [path, imageDataUrl(path, await api.readResource(path))] as const;
+        return [
+          path,
+          imageDataUrl(path, await api.readResource(path)),
+        ] as const;
       } catch {
         return [path, null] as const;
       }
@@ -656,7 +739,10 @@ function scheduleImageScan(): void {
 }
 
 /** `loadNote` for resources. Resources have no discovery yet, so the side pane clears. */
-async function loadResource(path: string, commit: (path: string) => void): Promise<boolean> {
+async function loadResource(
+  path: string,
+  commit: (path: string) => void,
+): Promise<boolean> {
   state.loading = true;
   render();
   try {
@@ -738,7 +824,10 @@ function inTextEntry(): boolean {
 
 /** Every row the tree currently paints, in paint order — the list the arrows walk. */
 function treeRows(): TreeRow[] {
-  return visibleRows(buildTree(state.notes, state.resources, state.dirs), state.expandedDirs);
+  return visibleRows(
+    buildTree(state.notes, state.resources, state.dirs),
+    state.expandedDirs,
+  );
 }
 
 /** A file-tree row; each carries its vault path in `data-tree-row` (render.ts). */
@@ -758,7 +847,8 @@ function findByData<E extends HTMLElement | SVGElement>(
   value: string | null,
 ): E | null {
   if (value === null) return null;
-  for (const node of root.querySelectorAll<E>(selector)) if (node.dataset[key] === value) return node;
+  for (const node of root.querySelectorAll<E>(selector))
+    if (node.dataset[key] === value) return node;
   return null;
 }
 
@@ -799,7 +889,12 @@ function focusTreeRow(path: string): void {
 
 /** The DOM row for a `sidenav.ts` row key. */
 function sideRowEl(key: string | null): HTMLElement | null {
-  return findByData<HTMLElement>(el("side-pane"), "[data-side-row]", "sideRow", key);
+  return findByData<HTMLElement>(
+    el("side-pane"),
+    "[data-side-row]",
+    "sideRow",
+    key,
+  );
 }
 
 /** The graph node for a scene id (graph.ts `GraphNode.id`). */
@@ -809,7 +904,9 @@ function gnodeEl(id: string | null): SVGElement | null {
 
 /** The row carrying the roving tabstop, as painted (sidenav.ts `rovingSideKey`). */
 function rovingSideRowEl(): HTMLElement | null {
-  return el("side-pane").querySelector<HTMLElement>('[data-side-row][tabindex="0"]');
+  return el("side-pane").querySelector<HTMLElement>(
+    '[data-side-row][tabindex="0"]',
+  );
 }
 
 /** Focus a discovery row; `focusTreeRow`'s counterpart. */
@@ -924,7 +1021,8 @@ function wireCmdHold(): void {
       // A bare ⌘ (⇧⌘ is the start of a chord). Refused while an overlay is up: Settings
       // already is the reference, and the recorder is listening for chords.
       if (e.key === "Meta" && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-        if (currentOverlay() === null) cmdHoldEvent({ kind: "hold", repeat: e.repeat });
+        if (currentOverlay() === null)
+          cmdHoldEvent({ kind: "hold", repeat: e.repeat });
         return;
       }
       cmdHoldEvent({ kind: "other" });
@@ -939,7 +1037,11 @@ function wireCmdHold(): void {
     true,
   );
   // A ⌘-click or ⌘-drag is a gesture, not a hold.
-  window.addEventListener("pointerdown", () => cmdHoldEvent({ kind: "other" }), true);
+  window.addEventListener(
+    "pointerdown",
+    () => cmdHoldEvent({ kind: "other" }),
+    true,
+  );
   // macOS never delivers the ⌘ keyup after ⌘⇥, Spotlight or Hide, so treat losing the
   // window as a release. Kept separate from `wireWindowBlur`'s listener.
   window.addEventListener("blur", () => cmdHoldEvent({ kind: "release" }));
@@ -955,11 +1057,15 @@ const FOCUSABLE =
  *  Menu items are `tabindex=-1` (arrow-navigated), so they're collected by class. */
 function overlayFocusables(): HTMLElement[] {
   // `[role="dialog"]` covers both the `.modal` box and Settings' `.settings-screen`.
-  const modal = document.querySelector<HTMLElement>('#modal-root [role="dialog"]');
+  const modal = document.querySelector<HTMLElement>(
+    '#modal-root [role="dialog"]',
+  );
   // `tabIndex >= 0` keeps roving tabstops (Settings' rail) to one Tab stop; the selector
   // alone matches `tabindex="-1"` buttons.
   if (modal) {
-    return [...modal.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((n) => n.tabIndex >= 0);
+    return [...modal.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+      (n) => n.tabIndex >= 0,
+    );
   }
   const menu = document.querySelector<HTMLElement>("#menu-root .context-menu");
   return menu ? [...menu.querySelectorAll<HTMLElement>(".context-item")] : [];
@@ -997,7 +1103,8 @@ function captureReturnFocus(): (() => void) | null {
   const gnode = active.closest<SVGElement>("[data-gnode]");
   if (gnode) {
     const id = gnode.dataset.gnode ?? null;
-    const linked = id?.startsWith("ghost:") === true ? id.slice("ghost:".length) : null;
+    const linked =
+      id?.startsWith("ghost:") === true ? id.slice("ghost:".length) : null;
     return () => (gnodeEl(id) ?? gnodeEl(linked) ?? el("note-pane")).focus();
   }
   if (active.id) {
@@ -1016,7 +1123,8 @@ let overlayReturn: (() => void) | null = null;
 /** Move focus into the overlay that just opened. */
 function focusIntoOverlay(kind: OverlayKind): void {
   // The link modal opens on its explanation field; Settings on its selected tab.
-  const preferred = kind === "link" ? document.getElementById("link-explanation") : null;
+  const preferred =
+    kind === "link" ? document.getElementById("link-explanation") : null;
   (preferred ?? overlayFocusables()[0])?.focus();
 }
 
@@ -1040,9 +1148,12 @@ function syncOverlayFocus(): void {
 // Paint just the Back/Forward buttons' enabled state (disabled at the ends and mid-op).
 function paintNav(): void {
   const back = document.getElementById("nav-back") as HTMLButtonElement | null;
-  const forward = document.getElementById("nav-forward") as HTMLButtonElement | null;
+  const forward = document.getElementById(
+    "nav-forward",
+  ) as HTMLButtonElement | null;
   if (back) back.disabled = state.loading || navCursor <= 0;
-  if (forward) forward.disabled = state.loading || navCursor >= navStack.length - 1;
+  if (forward)
+    forward.disabled = state.loading || navCursor >= navStack.length - 1;
 }
 
 // Back (-1) / Forward (+1), through the same edit-mode guard as any navigation. The cursor
@@ -1140,7 +1251,9 @@ function fmEditGuard(): boolean {
     state.fmEditing = false;
     return true;
   }
-  flash("Finish editing the frontmatter first — Save it, or press Esc to discard.");
+  flash(
+    "Finish editing the frontmatter first — Save it, or press Esc to discard.",
+  );
   return false;
 }
 
@@ -1206,7 +1319,8 @@ function hideFmError(): void {
 
 // Fold a whole discovery section; sticky across notes.
 function toggleSection(section: SideSection): void {
-  if (state.collapsedSections.has(section)) state.collapsedSections.delete(section);
+  if (state.collapsedSections.has(section))
+    state.collapsedSections.delete(section);
   else state.collapsedSections.add(section);
   render();
 }
@@ -1230,14 +1344,27 @@ const TREE_MENU_H = 132; // the context line + three items
 // + Rename / Move… / Copy vault path / Copy system path / Delete and their separator.
 const TREE_NODE_MENU_H = 300;
 
-function clampMenu(clientX: number, clientY: number, height: number): { x: number; y: number } {
+function clampMenu(
+  clientX: number,
+  clientY: number,
+  height: number,
+): { x: number; y: number } {
   const x = Math.min(clientX, window.innerWidth - CTX_MENU_W - 8);
   const y = Math.min(clientY, window.innerHeight - height - 8);
   return { x: Math.max(8, x), y: Math.max(8, y) };
 }
 
-function openCardMenu(clientX: number, clientY: number, path: string, title: string): void {
-  const { x, y } = clampMenu(clientX, clientY, state.editing ? CARD_EDIT_MENU_H : CARD_MENU_H);
+function openCardMenu(
+  clientX: number,
+  clientY: number,
+  path: string,
+  title: string,
+): void {
+  const { x, y } = clampMenu(
+    clientX,
+    clientY,
+    state.editing ? CARD_EDIT_MENU_H : CARD_MENU_H,
+  );
   state.contextMenu = { kind: "card", x, y, path, title: title || null };
   render();
 }
@@ -1248,7 +1375,11 @@ function openTreeMenu(
   dir: string,
   node: TreeNodeRef | null = null,
 ): void {
-  const { x, y } = clampMenu(clientX, clientY, node ? TREE_NODE_MENU_H : TREE_MENU_H);
+  const { x, y } = clampMenu(
+    clientX,
+    clientY,
+    node ? TREE_NODE_MENU_H : TREE_MENU_H,
+  );
   state.contextMenu = { kind: "tree", x, y, dir, node };
   render();
 }
@@ -1275,13 +1406,18 @@ type CardMenu = Extract<ContextMenuState, { kind: "card" }>;
 const TREE_ROW_ITEMS: readonly MenuItem<TreeNodeRef>[] = [
   { attr: "data-ctx-rename", closeFirst: false, act: startTreeRename },
   { attr: "data-ctx-move", closeFirst: false, act: openMoveModal },
-  { attr: "data-ctx-copy-vault-path", closeFirst: true, act: (node) => void copyPath(node.path) },
+  {
+    attr: "data-ctx-copy-vault-path",
+    closeFirst: true,
+    act: (node) => void copyPath(node.path),
+  },
   {
     attr: "data-ctx-copy-system-path",
     closeFirst: true,
     // The menu needs a vault to open, but never invent a root.
     act: (node) => {
-      if (state.vaultRoot !== null) void copyPath(systemPath(state.vaultRoot, node.path));
+      if (state.vaultRoot !== null)
+        void copyPath(systemPath(state.vaultRoot, node.path));
     },
   },
   { attr: "data-ctx-delete", closeFirst: false, act: requestDelete },
@@ -1289,20 +1425,52 @@ const TREE_ROW_ITEMS: readonly MenuItem<TreeNodeRef>[] = [
 
 /** The tree menu's items that act on the folder it was opened in. */
 const TREE_DIR_ITEMS: readonly MenuItem<string>[] = [
-  { attr: "data-ctx-new-note", closeFirst: false, act: (dir) => startTreeCreate("note", dir) },
-  { attr: "data-ctx-new-folder", closeFirst: false, act: (dir) => startTreeCreate("folder", dir) },
+  {
+    attr: "data-ctx-new-note",
+    closeFirst: false,
+    act: (dir) => startTreeCreate("note", dir),
+  },
+  {
+    attr: "data-ctx-new-folder",
+    closeFirst: false,
+    act: (dir) => startTreeCreate("folder", dir),
+  },
   // The OS picker is modal, so the menu goes first.
-  { attr: "data-ctx-import", closeFirst: true, act: (dir) => void pickAndImport(dir) },
+  {
+    attr: "data-ctx-import",
+    closeFirst: true,
+    act: (dir) => void pickAndImport(dir),
+  },
 ];
 
 /** A discovery card's (or graph ghost's) items. */
 const CARD_ITEMS: readonly MenuItem<CardMenu>[] = [
-  { attr: "data-ctx-open", closeFirst: true, act: (m) => void openNote(m.path) },
+  {
+    attr: "data-ctx-open",
+    closeFirst: true,
+    act: (m) => void openNote(m.path),
+  },
   // The drag's keyboard half — aimed at the caret's line.
-  { attr: "data-ctx-insert", closeFirst: true, act: (m) => insertCardLink(m.path) },
-  { attr: "data-ctx-link", closeFirst: true, act: (m) => openLinkModal(m.path, m.title ?? "") },
-  { attr: "data-ctx-explain", closeFirst: true, act: (m) => void openExplain(m.path) },
-  { attr: "data-ctx-why", closeFirst: true, act: (m) => void askWhy({ path: m.path, title: m.title }) },
+  {
+    attr: "data-ctx-insert",
+    closeFirst: true,
+    act: (m) => insertCardLink(m.path),
+  },
+  {
+    attr: "data-ctx-link",
+    closeFirst: true,
+    act: (m) => openLinkModal(m.path, m.title ?? ""),
+  },
+  {
+    attr: "data-ctx-explain",
+    closeFirst: true,
+    act: (m) => void openExplain(m.path),
+  },
+  {
+    attr: "data-ctx-why",
+    closeFirst: true,
+    act: (m) => void askWhy({ path: m.path, title: m.title }),
+  },
 ];
 
 /** A click while a menu is up: its items act; any other click dismisses it. */
@@ -1424,7 +1592,8 @@ function droppedFiles(dt: DataTransfer | null): DroppedFile[] {
       continue;
     }
     const file = item.getAsFile();
-    if (file) out.push({ name: file.name, size: file.size, isDirectory: false, file });
+    if (file)
+      out.push({ name: file.name, size: file.size, isDirectory: false, file });
   }
   // If `items` yielded nothing, fall back to the file list.
   if (out.length === 0) {
@@ -1442,7 +1611,10 @@ function canImportNow(): boolean {
 }
 
 /** The drop half: send each accepted file's bytes, then report once. */
-async function importDroppedFiles(dir: string, dropped: DroppedFile[]): Promise<void> {
+async function importDroppedFiles(
+  dir: string,
+  dropped: DroppedFile[],
+): Promise<void> {
   if (!canImportNow()) return;
   const plan = planImport(dropped);
   const refused = [...plan.refused];
@@ -1454,7 +1626,11 @@ async function importDroppedFiles(dir: string, dropped: DroppedFile[]): Promise<
       if (!entry.file) continue;
       try {
         const bytes = new Uint8Array(await entry.file.arrayBuffer());
-        const report = await api.importFile(dir, entry.name, bytesToBase64(bytes));
+        const report = await api.importFile(
+          dir,
+          entry.name,
+          bytesToBase64(bytes),
+        );
         imported.push(report.path);
       } catch (e) {
         refused.push(`${entry.name}: ${errText(e)}`);
@@ -1497,7 +1673,11 @@ async function pickAndImport(dir: string): Promise<void> {
 
 /** After an import: reveal, re-list, and toast once. Schedules the trailing embed, since
  *  imported notes are projected but unembedded. */
-async function finishImport(dir: string, imported: string[], refused: string[]): Promise<void> {
+async function finishImport(
+  dir: string,
+  imported: string[],
+  refused: string[],
+): Promise<void> {
   if (imported.length > 0) {
     revealDir(dir);
     state.selectedDir = dir;
@@ -1569,7 +1749,9 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
   const curPath = openDocPath(state);
   const affected =
     curPath !== null &&
-    (node.nodeKind === "folder" ? remapPath(curPath, node.path, to) !== null : curPath === node.path);
+    (node.nodeKind === "folder"
+      ? remapPath(curPath, node.path, to) !== null
+      : curPath === node.path);
   // Not `leaveEdits`: with no editor open this must not yield before the in-flight flag
   // is set below, or a second gesture could slip past it.
   if (affected && !fmEditGuard()) return false;
@@ -1594,9 +1776,12 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
     state.expandedDirs = new Set(
       [...state.expandedDirs].map((d) => remapPath(d, from, to) ?? d),
     );
-    state.selectedDir = remapPath(state.selectedDir, from, to) ?? state.selectedDir;
+    state.selectedDir =
+      remapPath(state.selectedDir, from, to) ?? state.selectedDir;
     revealDir(parentDir(to));
-    const openNotePath = state.current ? remapPath(state.current.path, from, to) : null;
+    const openNotePath = state.current
+      ? remapPath(state.current.path, from, to)
+      : null;
     const openResourcePath = state.currentResource
       ? remapPath(state.currentResource.path, from, to)
       : null;
@@ -1671,7 +1856,9 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
   const curPath = openDocPath(state);
   const affected =
     curPath !== null &&
-    (node.nodeKind === "folder" ? isWithin(curPath, node.path) : curPath === node.path);
+    (node.nodeKind === "folder"
+      ? isWithin(curPath, node.path)
+      : curPath === node.path);
   // Not `leaveEdits`, as in `executeMove`.
   if (affected && !fmEditGuard()) return;
   if (affected && state.editing && !(await closeEditor())) return;
@@ -1690,7 +1877,9 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
       dangled = r.dangled.length;
     } else {
       // A note and a resource report alike.
-      const r = await (node.nodeKind === "note" ? api.deleteNote : api.deleteResource)(node.path);
+      const r = await (
+        node.nodeKind === "note" ? api.deleteNote : api.deleteResource
+      )(node.path);
       what = r.path;
       dangled = r.dangled.length;
     }
@@ -1739,7 +1928,9 @@ function toggleSource(): void {
   if (!fmEditGuard()) return; // a reading-view flip would rebuild the pane
   state.sourceOpen = !state.sourceOpen;
   if (state.editing) {
-    editorView?.dispatch({ effects: lpCompartment.reconfigure(livePreviewConf()) });
+    editorView?.dispatch({
+      effects: lpCompartment.reconfigure(livePreviewConf()),
+    });
     paintEditor();
   } else {
     render();
@@ -1887,7 +2078,9 @@ function closeChat(): void {
 }
 
 function focusChatInput(): void {
-  (document.getElementById("chat-input") as HTMLTextAreaElement | null)?.focus();
+  (
+    document.getElementById("chat-input") as HTMLTextAreaElement | null
+  )?.focus();
 }
 
 /** Probe the chat provider for the setup card. A rejected IPC leaves it "loading". */
@@ -1907,8 +2100,10 @@ async function sendChat(question: string): Promise<void> {
   if (!q || state.chatStreaming !== null) return;
   // History is taken before this question joins the transcript.
   const history = chatHistory(state.chatMessages);
+  // The open note is the focus (GH #253): "this doc" means it. A resource isn't a note.
+  const focus = state.current?.path ?? null;
   await runChatTurn(q, true, "Searching your notes…", (onToken) =>
-    api.ask(q, history, onToken),
+    api.ask(q, history, focus, onToken),
   );
 }
 
@@ -1921,10 +2116,14 @@ const SIMILAR_LIMIT = 10;
  * *Similar & unlinked* list. The host runs it as a tool-using turn (`Vault::why_similar`);
  * follow-ups are ordinary asks.
  */
-async function askWhy(candidate: { path: string; title: string | null }): Promise<void> {
+async function askWhy(candidate: {
+  path: string;
+  title: string | null;
+}): Promise<void> {
   const anchor = state.current;
   if (!anchor || state.chatStreaming !== null) {
-    if (state.chatStreaming !== null) flash("B2 is still answering. Press Esc to stop it.");
+    if (state.chatStreaming !== null)
+      flash("B2 is still answering. Press Esc to stop it.");
     return;
   }
   if (!state.chatOpen) openChat();
@@ -1936,7 +2135,8 @@ async function askWhy(candidate: { path: string; title: string | null }): Promis
     whyQuestion(candidate, anchor),
     false,
     "Looking things up with B2 tools…",
-    (onToken) => api.whySimilar(anchor.path, candidate.path, SIMILAR_LIMIT, onToken),
+    (onToken) =>
+      api.whySimilar(anchor.path, candidate.path, SIMILAR_LIMIT, onToken),
   );
 }
 
@@ -1966,7 +2166,11 @@ async function openExplain(candidate: string): Promise<void> {
   render();
   document.getElementById("explain-close")?.focus();
   try {
-    const view = await api.explainSimilar(anchor.path, candidate, SIMILAR_LIMIT);
+    const view = await api.explainSimilar(
+      anchor.path,
+      candidate,
+      SIMILAR_LIMIT,
+    );
     if (state.explainCard !== current) return; // superseded or closed meanwhile
     current.view = view;
   } catch (e) {
@@ -2001,7 +2205,9 @@ async function runChatTurn(
   state.chatStreaming = "";
   state.chatWaiting = waiting;
   render();
-  const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+  const input = document.getElementById(
+    "chat-input",
+  ) as HTMLTextAreaElement | null;
   if (input && clearComposer) input.value = "";
   scrollChatToEnd();
   try {
@@ -2011,14 +2217,17 @@ async function runChatTurn(
       state.chatStreaming += token;
       paintChatStream();
     });
-    if (state.vaultRoot === askedIn) state.chatMessages.push(answerMessage(view));
+    if (state.vaultRoot === askedIn)
+      state.chatMessages.push(answerMessage(view));
   } catch (e) {
-    if (state.vaultRoot === askedIn) state.chatMessages.push(errorMessage(errText(e)));
+    if (state.vaultRoot === askedIn)
+      state.chatMessages.push(errorMessage(errText(e)));
   } finally {
     // Read focus before the repaint swaps the pane.
     const active = document.activeElement;
     const composerHeld =
-      active === document.body || (active instanceof HTMLElement && active.id === "chat-input");
+      active === document.body ||
+      (active instanceof HTMLElement && active.id === "chat-input");
     state.chatStreaming = null;
     render();
     scrollChatToEnd();
@@ -2063,7 +2272,9 @@ function newChat(): void {
 function setChatMode(cloud: boolean): void {
   state.chatCloud = cloud;
   render();
-  const url = document.getElementById("settings-chat-url") as HTMLInputElement | null;
+  const url = document.getElementById(
+    "settings-chat-url",
+  ) as HTMLInputElement | null;
   if (url) {
     url.value = cloud ? "" : LOCAL_CHAT_ENDPOINT;
     url.focus();
@@ -2091,7 +2302,9 @@ async function saveChatConfig(): Promise<void> {
   // `clearChatKey`.
   const key = value("settings-chat-key");
   // Validate the tool-call cap before sending anything.
-  const capField = document.getElementById("settings-chat-tool-cap") as HTMLInputElement | null;
+  const capField = document.getElementById(
+    "settings-chat-tool-cap",
+  ) as HTMLInputElement | null;
   const cap =
     capField && state.chatSetup
       ? toolCapInput(capField.value, state.chatSetup.tool_calls)
@@ -2184,10 +2397,11 @@ async function commitLink(): Promise<void> {
   const src = state.current;
   if (!target || !src) return;
   const relation =
-    (document.getElementById("link-relation") as HTMLSelectElement | null)?.value ??
-    state.linkRelation;
+    (document.getElementById("link-relation") as HTMLSelectElement | null)
+      ?.value ?? state.linkRelation;
   const explanationRaw =
-    (document.getElementById("link-explanation") as HTMLInputElement | null)?.value ?? "";
+    (document.getElementById("link-explanation") as HTMLInputElement | null)
+      ?.value ?? "";
   const explanation = explanationRaw.trim() || null;
 
   state.loading = true;
@@ -2197,7 +2411,11 @@ async function commitLink(): Promise<void> {
     // would conflict with our own link write.
     if (state.editing) await saveNow();
     const report = await api.link(src.path, target.path, relation, explanation);
-    if (state.editing && !state.editConflict && state.current?.path === src.path) {
+    if (
+      state.editing &&
+      !state.editConflict &&
+      state.current?.path === src.path
+    ) {
       // Not under the conflict bar: a fresh revision would let a save clobber the edit.
       const fresh = await api.readNote(src.path);
       state.current.revision = fresh.revision;
@@ -2369,7 +2587,8 @@ function initMenuCommands(): void {
   void api.onMenuCommand((id) => {
     if (id === "view.zoom-in") nudgeZoom(1);
     else if (id === "view.zoom-out") nudgeZoom(-1);
-    else if (id === "view.zoom-reset" && zoom !== DEFAULT_ZOOM) applyZoom(DEFAULT_ZOOM);
+    else if (id === "view.zoom-reset" && zoom !== DEFAULT_ZOOM)
+      applyZoom(DEFAULT_ZOOM);
   });
 }
 
@@ -2382,7 +2601,9 @@ function initMenuCommands(): void {
  *  its own copy of the chords, so it is reconfigured via its compartment too. */
 function installKeymap(): void {
   setActiveBindings(applyOverrides(DEFAULT_BINDINGS, state.keyOverrides));
-  editorView?.dispatch({ effects: keysCompartment.reconfigure(editorKeymap()) });
+  editorView?.dispatch({
+    effects: keysCompartment.reconfigure(editorKeymap()),
+  });
 }
 
 /** Read the saved keyboard and install it (before `buildShell`, which prints chords).
@@ -2414,7 +2635,13 @@ let recorderTimer: number | null = null;
 function startRecording(id: BindingId): void {
   const b = findBinding(activeBindings(), id);
   if (!b || b.fixed !== undefined) return; // a chip for a fixed chord isn't a button at all
-  state.recorder = { id, candidate: null, problems: [], hint: null, blurred: false };
+  state.recorder = {
+    id,
+    candidate: null,
+    problems: [],
+    hint: null,
+    blurred: false,
+  };
   recorderOpenedAt = Date.now();
   cancelProbe();
   // The silence probe (recorder.ts).
@@ -2422,7 +2649,10 @@ function startRecording(id: BindingId): void {
     recorderTimer = null;
     if (!state.recorder || state.recorder.candidate !== null) return;
     const { blurred } = state.recorder; // what the session has observed, not what this tick assumes
-    state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred });
+    state.recorder.hint = silenceHint({
+      elapsedMs: Date.now() - recorderOpenedAt,
+      blurred,
+    });
     render();
   }, PROBE_AFTER_MS);
   render();
@@ -2462,7 +2692,13 @@ function recorderKeydown(e: KeyboardEvent): boolean {
     stopRecording();
     return true;
   }
-  if (canonicalKey(e.key) === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+  if (
+    canonicalKey(e.key) === "Enter" &&
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    !e.shiftKey
+  ) {
     if (rec.candidate !== null && !refused(rec.problems)) commitRecording();
     return true;
   }
@@ -2477,7 +2713,12 @@ function recorderKeydown(e: KeyboardEvent): boolean {
   }
   cancelProbe(); // a chord arrived, so there is no silence left to read
   rec.candidate = got.spec;
-  rec.problems = chordProblems(rec.id, got.spec, DEFAULT_BINDINGS, state.keyOverrides);
+  rec.problems = chordProblems(
+    rec.id,
+    got.spec,
+    DEFAULT_BINDINGS,
+    state.keyOverrides,
+  );
   rec.hint = null;
   render();
   return true;
@@ -2745,7 +2986,12 @@ function canAutoEmbed(startedRoot: string): boolean {
 // Coverage describes the cached index, so every open must first reconcile disk.
 // Unchanged chunks/vectors survive; only the resulting pending set needs embedding.
 async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
-  if (state.reindexing || startedRoot === null || state.vaultRoot !== startedRoot) return;
+  if (
+    state.reindexing ||
+    startedRoot === null ||
+    state.vaultRoot !== startedRoot
+  )
+    return;
 
   beginIndexRun();
   render();
@@ -2804,8 +3050,14 @@ let embedTimer: number | undefined;
 const lpCompartment = new Compartment();
 function livePreviewConf(): Extension {
   return state.sourceOpen
-    ? [syntaxHighlighting(b2Highlighter), EditorView.contentAttributes.of({ class: "src-body" })]
-    : [livePreview((target) => void followWikilink(target)), syntaxHighlighting(b2Highlighter)];
+    ? [
+        syntaxHighlighting(b2Highlighter),
+        EditorView.contentAttributes.of({ class: "src-body" }),
+      ]
+    : [
+        livePreview((target) => void followWikilink(target)),
+        syntaxHighlighting(b2Highlighter),
+      ];
 }
 /** The in-flight save chain — resolves only when it settles (trailing saves included). */
 let inFlight: Promise<void> | null = null;
@@ -2831,7 +3083,6 @@ function enterEdit(): void {
 
 // `[[` completion over the vault's lists as they stand (editorcmds.ts).
 const wikiSource = wikiCompletionSource(() => state);
-
 
 /** B2's chords in the editor, read from the live registry each call. A function, not a
  *  const, or it would freeze the defaults before boot loads rebindings (GH #125). */
@@ -2864,9 +3115,8 @@ function b2EditorKeymap(): KeyBinding[] {
 // B2's chords and the stock ones share one array, B2's first: that order makes ⌘I italic
 // rather than `selectParentSyntax` (editorkeys.test.ts pins it).
 const keysCompartment = new Compartment();
-const editorKeymap = (): Extension => keymap.of([...b2EditorKeymap(), ...STOCK_EDITOR_KEYMAP]);
-
-
+const editorKeymap = (): Extension =>
+  keymap.of([...b2EditorKeymap(), ...STOCK_EDITOR_KEYMAP]);
 
 /**
  * ⌘⇧V: paste as plain text, bypassing `richPaste`. WebKit fires no paste event for ⌘⇧V,
@@ -2917,7 +3167,11 @@ function mountEditor(body: string): void {
     extensions: [
       // GFM (the default base is CommonMark-only, with no `Strikethrough`) plus wikilinks.
       // `codeLanguages` parses fences with highlight.ts's resolver, as the reading view does.
-      markdown({ base: markdownLanguage, extensions: [wikilink], codeLanguages: resolveLang }),
+      markdown({
+        base: markdownLanguage,
+        extensions: [wikilink],
+        codeLanguages: resolveLang,
+      }),
       history(),
       // Registry chords (CodeMirror syntax), ahead of the stock ones (`editorKeymap`).
       keysCompartment.of(editorKeymap()),
@@ -3229,10 +3483,16 @@ function insertCardLink(path: string): void {
   if (!state.editing || !view || !path) return;
   // The same `DraggedCard` shape the drag carries.
   const card: DraggedCard = { path, target: noteTarget(path) };
-  const plan = planDrop(view.state, view.state.selection.main.head, card.target);
+  const plan = planDrop(
+    view.state,
+    view.state.selection.main.head,
+    card.target,
+  );
   if (plan === null) {
     // The drop refuses silently; a menu item must say why.
-    flash("The cursor is inside code — a wikilink there would stay literal. Move it out first.");
+    flash(
+      "The cursor is inside code — a wikilink there would stay literal. Move it out first.",
+    );
     return;
   }
   insertDrop(view, plan);
@@ -3324,7 +3584,8 @@ function applyReadingFind(): void {
   }
   const nodes: Text[] = [];
   const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  for (let n = walker.nextNode(); n; n = walker.nextNode())
+    nodes.push(n as Text);
   const segs = nodes.map((n) => n.data.length);
   findMatchesList = findMatches(nodes.map((n) => n.data).join(""), findQuery);
   findRanges = findMatchesList.map((m) => {
@@ -3379,9 +3640,12 @@ function setFindQuery(q: string): void {
     const view = editorView;
     const matches = findMatches(view.state.doc.toString(), q);
     // Anchor on the previous match, else the caret, so typing doesn't jump to the top.
-    const anchor = findMatchesList[findActive]?.from ?? view.state.selection.main.from;
+    const anchor =
+      findMatchesList[findActive]?.from ?? view.state.selection.main.from;
     const active = activeAfter(matches, anchor);
-    const effects: StateEffect<unknown>[] = [setFindEffect.of({ query: q, active })];
+    const effects: StateEffect<unknown>[] = [
+      setFindEffect.of({ query: q, active }),
+    ];
     const m = matches[active];
     if (m) effects.push(EditorView.scrollIntoView(m.from, { y: "center" }));
     view.dispatch({ effects });
@@ -3502,7 +3766,12 @@ async function reconcileExternalChange(): Promise<void> {
   //   • while editing: never clobber the buffer or adopt a revision under it; the save
   //     guard surfaces the conflict (crates/b2-desktop/CLAUDE.md).
   //   • while reindexing: the run owns the open note's refresh.
-  if (state.current && !state.editing && !state.fmEditing && !state.reindexing) {
+  if (
+    state.current &&
+    !state.editing &&
+    !state.fmEditing &&
+    !state.reindexing
+  ) {
     const cur = state.current;
     try {
       const fresh = await api.readNote(cur.path);
@@ -3530,7 +3799,8 @@ async function reconcileExternalChange(): Promise<void> {
       const fresh = await api.explainResource(cur.path);
       // Re-read the bytes too: the picture may have changed in place.
       const picture = await loadResourceImage(fresh);
-      if (state.currentResource?.path === cur.path) adoptResource(fresh, picture);
+      if (state.currentResource?.path === cur.path)
+        adoptResource(fresh, picture);
     } catch {
       if (state.currentResource?.path === cur.path) {
         flash("This file is no longer on disk — it was moved or removed.");
@@ -3746,7 +4016,10 @@ function wireFocusMemory(): void {
   // Track focus continuously for `lastFocused` (K1); `<body>` is not a real target.
   document.addEventListener("focusin", (e) => {
     const t = e.target;
-    if ((t instanceof HTMLElement || t instanceof SVGElement) && t !== document.body) {
+    if (
+      (t instanceof HTMLElement || t instanceof SVGElement) &&
+      t !== document.body
+    ) {
       lastFocused = t;
     }
   });
@@ -3755,7 +4028,11 @@ function wireFocusMemory(): void {
 function wireFmErrorClear(): void {
   // Typing in the frontmatter editor clears its error (delegated: rendered dynamically).
   document.addEventListener("input", (e) => {
-    if (state.fmEditing && e.target instanceof HTMLTextAreaElement && e.target.id === "fm-editor") {
+    if (
+      state.fmEditing &&
+      e.target instanceof HTMLTextAreaElement &&
+      e.target.id === "fm-editor"
+    ) {
       hideFmError();
     }
   });
@@ -3787,7 +4064,9 @@ function wireClicks(): void {
       }
       if (!isInPageAnchor(href)) {
         e.preventDefault();
-        flash("B2 doesn't follow this link — web links open in your browser, [[wikilinks]] open notes.");
+        flash(
+          "B2 doesn't follow this link — web links open in your browser, [[wikilinks]] open notes.",
+        );
       }
     }
 
@@ -3931,7 +4210,10 @@ function wireClicks(): void {
     // Clicking a ghost opens the link modal; committing solidifies it into a typed edge.
     const ghostNode = target.closest<HTMLElement>("[data-ghost-link]");
     if (ghostNode) {
-      openLinkModal(ghostNode.dataset.ghostLink ?? "", ghostNode.dataset.cardTitle ?? "");
+      openLinkModal(
+        ghostNode.dataset.ghostLink ?? "",
+        ghostNode.dataset.cardTitle ?? "",
+      );
       return;
     }
 
@@ -3953,7 +4235,9 @@ function wireClicks(): void {
     }
 
     // A click moves the tree's roving tabstop too (WebKit doesn't focus buttons on click).
-    const treeRow = target.closest<HTMLElement>("#tree-pane .tree-row[data-tree-row]");
+    const treeRow = target.closest<HTMLElement>(
+      "#tree-pane .tree-row[data-tree-row]",
+    );
     if (treeRow) state.treeFocus = treeRow.dataset.treeRow ?? null;
 
     const dir = target.closest<HTMLElement>("[data-dir]");
@@ -3993,7 +4277,8 @@ function wireClicks(): void {
       return;
     }
     if (target.closest("[data-explain-all]")) {
-      if (state.explainCard) state.explainCard.allPairs = !state.explainCard.allPairs;
+      if (state.explainCard)
+        state.explainCard.allPairs = !state.explainCard.allPairs;
       render();
       return;
     }
@@ -4053,10 +4338,17 @@ function wireContextMenu(): void {
       openTreeMenu(e.clientX, e.clientY, dir, node && node.path ? node : null);
       return;
     }
-    const card = target.closest<HTMLElement>(".card.candidate, .gnode.is-ghost");
+    const card = target.closest<HTMLElement>(
+      ".card.candidate, .gnode.is-ghost",
+    );
     if (!card) return;
     e.preventDefault();
-    openCardMenu(e.clientX, e.clientY, card.dataset.cardPath ?? "", card.dataset.cardTitle ?? "");
+    openCardMenu(
+      e.clientX,
+      e.clientY,
+      card.dataset.cardPath ?? "",
+      card.dataset.cardTitle ?? "",
+    );
   });
 }
 
@@ -4091,7 +4383,13 @@ function wireTreeKeys(): void {
     }
 
     // First-letter typeahead, on bare printable keys only.
-    if (e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (
+      e.key.length === 1 &&
+      e.key !== " " &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey
+    ) {
       const hit = typeaheadTarget(rows, rowIndex(rows, path), e.key);
       if (hit !== null) {
         e.preventDefault();
@@ -4106,7 +4404,9 @@ function wireSideKeys(): void {
   // `<div>` containing its open button, so ⏎/Space click that button
   // (crates/b2-desktop/CLAUDE.md); button rows use the platform's activation.
   el("side-pane").addEventListener("keydown", (e) => {
-    const row = (e.target as HTMLElement).closest<HTMLElement>("[data-side-row]");
+    const row = (e.target as HTMLElement).closest<HTMLElement>(
+      "[data-side-row]",
+    );
     if (!row) return;
     const key = row.dataset.sideRow ?? "";
     const rows = sideRows(state);
@@ -4156,7 +4456,9 @@ function wireMenuDismissal(): void {
 
 function wireFindBar(): void {
   // Static chrome, so direct listeners. Preventing mousedown keeps focus in the input.
-  findInput().addEventListener("input", (e) => setFindQuery((e.target as HTMLInputElement).value));
+  findInput().addEventListener("input", (e) =>
+    setFindQuery((e.target as HTMLInputElement).value),
+  );
   const findButtons: [string, () => void][] = [
     ["find-prev", () => findStep(-1)],
     ["find-next", () => findStep(1)],
@@ -4179,7 +4481,9 @@ function wireForms(): void {
     // The chat composer is a form, so its Ask button submits (`chat.send` is fixed).
     if ((e.target as HTMLElement).id === "chat-composer") {
       e.preventDefault();
-      const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+      const input = document.getElementById(
+        "chat-input",
+      ) as HTMLTextAreaElement | null;
       void sendChat(input?.value ?? "");
     }
   });
@@ -4196,7 +4500,10 @@ function wireForms(): void {
       void changeModel((t as HTMLSelectElement).value);
     }
     // The install banner's "Don't remind me again": persist and dismiss.
-    if (t instanceof HTMLInputElement && t.matches("[data-install-remind-off]")) {
+    if (
+      t instanceof HTMLInputElement &&
+      t.matches("[data-install-remind-off]")
+    ) {
       dismissEmbedReminder(true);
     }
   });
@@ -4222,7 +4529,10 @@ function wireChords(): void {
     // The recorder first: while open, keystrokes are chords to record, not commands.
     if (recorderKeydown(e)) return;
     // The inline create input owns its keys; nothing leaks to the chords below.
-    if (state.treeCreate && (e.target as HTMLElement).id === "tree-create-input") {
+    if (
+      state.treeCreate &&
+      (e.target as HTMLElement).id === "tree-create-input"
+    ) {
       if (isBound(e, "create.commit")) {
         e.preventDefault();
         void commitTreeCreate((e.target as HTMLInputElement).value, true);
@@ -4233,7 +4543,10 @@ function wireChords(): void {
       return;
     }
     // The rename input owns its keys the same way.
-    if (state.treeRename && (e.target as HTMLElement).id === "tree-rename-input") {
+    if (
+      state.treeRename &&
+      (e.target as HTMLElement).id === "tree-rename-input"
+    ) {
       if (isBound(e, "rename.commit")) {
         e.preventDefault();
         void commitTreeRename((e.target as HTMLInputElement).value);
@@ -4245,7 +4558,10 @@ function wireChords(): void {
     }
     // The chat composer's ⏎. Other keys fall through, so ⌘J, ⌘, and Esc work from it;
     // ⇧⏎ stays the textarea's newline.
-    if ((e.target as HTMLElement).id === "chat-input" && isBound(e, "chat.send")) {
+    if (
+      (e.target as HTMLElement).id === "chat-input" &&
+      isBound(e, "chat.send")
+    ) {
       e.preventDefault();
       void sendChat((e.target as HTMLTextAreaElement).value);
       return;
@@ -4280,7 +4596,11 @@ function wireChords(): void {
         const i = items.indexOf(document.activeElement as HTMLElement);
         const step = e.shiftKey ? -1 : 1;
         const next =
-          i < 0 ? (e.shiftKey ? items.length - 1 : 0) : (i + step + items.length) % items.length;
+          i < 0
+            ? e.shiftKey
+              ? items.length - 1
+              : 0
+            : (i + step + items.length) % items.length;
         items[next].focus();
       }
       return;
@@ -4294,7 +4614,8 @@ function wireChords(): void {
           e.preventDefault();
           const i = items.indexOf(document.activeElement as HTMLElement);
           const n = items.length;
-          const next = i < 0 ? (down ? 0 : n - 1) : (i + (down ? 1 : -1) + n) % n;
+          const next =
+            i < 0 ? (down ? 0 : n - 1) : (i + (down ? 1 : -1) + n) % n;
           items[next].focus();
         }
         return;
@@ -4400,7 +4721,8 @@ function wireChords(): void {
       const overlay = currentOverlay();
       if (overlay !== null && overlay !== "settings") return;
       e.preventDefault();
-      if (state.settingsOpen && state.settingsTab === "keyboard") closeSettings();
+      if (state.settingsOpen && state.settingsTab === "keyboard")
+        closeSettings();
       else void openSettings("keyboard");
       return;
     }
@@ -4439,7 +4761,9 @@ function wireChords(): void {
           : null;
       if (node) {
         e.preventDefault();
-        node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        node.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
         return;
       }
     }
@@ -4452,7 +4776,11 @@ function wireChords(): void {
       const node: TreeNodeRef | null = row
         ? treeRowRef(row)
         : state.current
-          ? { path: state.current.path, nodeKind: "note", label: baseName(state.current.path) }
+          ? {
+              path: state.current.path,
+              nodeKind: "note",
+              label: baseName(state.current.path),
+            }
           : state.currentResource
             ? {
                 path: state.currentResource.path,
@@ -4572,7 +4900,10 @@ function wireWindowBlur(): void {
     if (state.recorder && state.recorder.candidate === null) {
       cancelProbe(); // the blur answered; see `cancelProbe`
       state.recorder.blurred = true;
-      state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred: true });
+      state.recorder.hint = silenceHint({
+        elapsedMs: Date.now() - recorderOpenedAt,
+        blurred: true,
+      });
       render();
     }
   });
@@ -4599,7 +4930,9 @@ function wireDrags(): void {
     dropHighlight = null;
   };
   /** The drop context under the cursor: a row element + its destination folder. */
-  const dropTargetOf = (target: HTMLElement): { el: Element; dir: string } | null => {
+  const dropTargetOf = (
+    target: HTMLElement,
+  ): { el: Element; dir: string } | null => {
     const pane = target.closest("#tree-pane");
     if (!pane) return null;
     const row = target.closest<HTMLElement>(TREE_ROW);
@@ -4638,7 +4971,8 @@ function wireDrags(): void {
   });
 
   /** Is this drag carrying files from outside the app (as opposed to text, or a row)? */
-  const carriesFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? false;
+  const carriesFiles = (e: DragEvent) =>
+    e.dataTransfer?.types.includes("Files") ?? false;
 
   /** Is the pointer over the editor's buffer — the one surface that accepts a card? */
   const overBuffer = (e: DragEvent) =>
@@ -4647,7 +4981,8 @@ function wireDrags(): void {
   /** Would WebKit navigate (losing the app) if this were dropped unhandled? Files and
    *  dragged links. */
   const navigatesWebview = (e: DragEvent) =>
-    carriesFiles(e) || (e.dataTransfer?.types.includes("text/uri-list") ?? false);
+    carriesFiles(e) ||
+    (e.dataTransfer?.types.includes("text/uri-list") ?? false);
 
   /** Where an external file drag may land: a tree target, or nowhere. */
   const importTargetOf = (e: DragEvent) =>
@@ -4669,7 +5004,9 @@ function wireDrags(): void {
         return;
       }
       clearDropPreview();
-      markSideCancel(e.target instanceof Element && e.target.closest("#side-pane") !== null);
+      markSideCancel(
+        e.target instanceof Element && e.target.closest("#side-pane") !== null,
+      );
       if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
       return;
     }
@@ -4688,7 +5025,8 @@ function wireDrags(): void {
       return;
     }
     const drop = dropTargetOf(e.target as HTMLElement);
-    const valid = drop !== null && canMoveInto(treeDrag.path, treeDrag.nodeKind, drop.dir);
+    const valid =
+      drop !== null && canMoveInto(treeDrag.path, treeDrag.nodeKind, drop.dir);
     if (drop?.el !== dropHighlight) clearDropHighlight();
     if (!valid) return;
     e.preventDefault(); // this is what makes the target droppable
@@ -4720,7 +5058,8 @@ function wireDrags(): void {
       return;
     }
     const drop = dropTargetOf(e.target as HTMLElement);
-    if (drop === null || !canMoveInto(drag.path, drag.nodeKind, drop.dir)) return;
+    if (drop === null || !canMoveInto(drag.path, drag.nodeKind, drop.dir))
+      return;
     e.preventDefault();
     void executeMove(drag, moveDestination(drag.path, drop.dir));
   });
@@ -4785,7 +5124,9 @@ async function boot(): Promise<void> {
   }
   if (lostChords.length > 0) {
     // Reported now that there is a shell, after any startup failure's notice.
-    flash(`${lostChords.length} saved shortcut(s) couldn't be applied — those are back to their defaults.`);
+    flash(
+      `${lostChords.length} saved shortcut(s) couldn't be applied — those are back to their defaults.`,
+    );
   }
   render();
   // Reconcile changes made while the app was closed, then fill any missing vectors.

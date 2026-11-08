@@ -50,6 +50,17 @@ export interface AnswerView {
   cancelled: boolean;
   /** The B2 tools that ran, in order. Absent for a plain `ask`, which offers none. */
   tools?: ToolUse[];
+  /** The note the question was asked about (GH #253). Absent when none was open. */
+  focus?: FocusView;
+}
+
+/** What a focused `ask` told the model about the open note (`b2-core`'s `FocusView`):
+ *  which note, and how much of it. `passages_shown < passages_total` means the engine's
+ *  cap trimmed it, and the pane says so rather than let the answer pass as whole-note. */
+export interface FocusView {
+  path: string;
+  passages_shown: number;
+  passages_total: number;
 }
 
 /** One tool run during a chat turn (`b2-core`'s `ToolUseView`). For a model-made call,

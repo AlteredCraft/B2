@@ -186,6 +186,10 @@ pub enum Command {
     Ask {
         /// The question, in plain language.
         question: String,
+        /// The note the question is about (a vault-relative path): "this note" means it,
+        /// and its passages are handed to the model first, ahead of retrieval.
+        #[arg(long, value_name = "PATH")]
+        note: Option<String>,
         #[command(flatten)]
         llm: LlmArgs,
     },
@@ -211,6 +215,9 @@ pub enum Command {
     /// mid-stream (the partial text stands); `/exit` or Ctrl-D leaves. History is
     /// session-only: nothing about a chat is ever written to your notes or the index.
     Chat {
+        /// The note the conversation is about (a vault-relative path), as `ask --note`.
+        #[arg(long, value_name = "PATH")]
+        note: Option<String>,
         #[command(flatten)]
         llm: LlmArgs,
     },

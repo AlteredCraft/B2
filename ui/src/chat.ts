@@ -12,6 +12,7 @@ import type {
   ChatSetup,
   ChatTurn,
   Citation,
+  FocusView,
   OllamaModel,
   ToolCallCap,
   ToolUse,
@@ -31,6 +32,8 @@ export interface ChatMessage {
   cancelled: boolean;
   /** The B2 tools the answer was built from. */
   tools?: ToolUse[];
+  /** The note the question was asked about, when one was open (GH #253). */
+  focus?: FocusView;
   /** The host's failure message, in place of an answer. */
   error?: string;
 }
@@ -48,7 +51,27 @@ export function answerMessage(view: AnswerView): ChatMessage {
     citations: view.citations,
     cancelled: view.cancelled,
     tools: view.tools ?? [],
+    focus: view.focus,
   };
+}
+
+/**
+ * What an answer was about, under it: the open note, and a loud note when the engine's
+ * cap handed over only part of it. "" when the question had no focus.
+ */
+export function focusLine(focus: FocusView | undefined): string {
+  if (!focus) return "";
+  const about = `About ${focus.path}`;
+  if (focus.passages_shown >= focus.passages_total) return about;
+  return `${about} — only the first ${focus.passages_shown} of its ${focus.passages_total} passages were used`;
+}
+
+/** The composer's placeholder: names the open note, so it's visible before asking what
+ *  "this note" will mean. */
+export function composerPlaceholder(focus: string | null): string {
+  if (!focus) return "Ask your notes…";
+  const name = (focus.split("/").pop() ?? focus).replace(/\.md$/, "");
+  return `Ask about ${name}…`;
 }
 
 /**
@@ -68,8 +91,14 @@ export function whyQuestion(
  * untrusted model output, and the paint escapes it.
  */
 export function toolsLine(tools: readonly ToolUse[] = []): string {
-  const names = [...new Set(tools.map((t) => t.name.replace(/^b2_/, "").replaceAll("_", " ")))];
-  return names.length === 0 ? "" : `Looked up with B2 tools: ${names.join(", ")}`;
+  const names = [
+    ...new Set(
+      tools.map((t) => t.name.replace(/^b2_/, "").replaceAll("_", " ")),
+    ),
+  ];
+  return names.length === 0
+    ? ""
+    : `Looked up with B2 tools: ${names.join(", ")}`;
 }
 
 /**
@@ -87,13 +116,22 @@ export function toolCapInput(
   // Digits only: `Number()` would wave through "1e3", " 12 " and "0x10".
   const n = /^\d+$/.test(typed) ? Number(typed) : Number.NaN;
   if (!Number.isSafeInteger(n) || n < 1 || n > cap.ceiling)
-    return { error: `Tool calls per reply must be a whole number from 1 to ${cap.ceiling}.` };
+    return {
+      error: `Tool calls per reply must be a whole number from 1 to ${cap.ceiling}.`,
+    };
   return { send: String(n) };
 }
 
 /** A turn that failed. */
 export function errorMessage(error: string): ChatMessage {
-  return { role: "assistant", text: "", citations: [], cancelled: false, tools: [], error };
+  return {
+    role: "assistant",
+    text: "",
+    citations: [],
+    cancelled: false,
+    tools: [],
+    error,
+  };
 }
 
 /**
@@ -113,7 +151,11 @@ export function turnRowKey(index: number): string {
 
 /** A citation row's key. Like `cardRowKey`, position makes it unique and the target makes
  *  a stale key fail to match. What it opens comes from the markup's `data-open` (E5). */
-export function citationRowKey(turn: number, marker: number, path: string): string {
+export function citationRowKey(
+  turn: number,
+  marker: number,
+  path: string,
+): string {
   return `chat:cite:${turn}:${marker}:${path}`;
 }
 
@@ -124,7 +166,10 @@ export const STREAMING_ROW_KEY = "chat:streaming";
  * Every row the chat pane paints, in order: each turn with its citations under it, then
  * the streaming answer. Nothing folds, but → still steps into a turn's citations.
  */
-export function chatRows(messages: readonly ChatMessage[], streaming: boolean): SideRow[] {
+export function chatRows(
+  messages: readonly ChatMessage[],
+  streaming: boolean,
+): SideRow[] {
   const rows: SideRow[] = [];
   messages.forEach((m, i) => {
     const cites = m.citations.map((c) => ({
@@ -159,7 +204,8 @@ export function chatRows(messages: readonly ChatMessage[], streaming: boolean): 
  * The chat pane's empty state. An unembedded vault is not one: it still answers,
  * keyword-only (M4), so it gets a note instead ([`retrievalNote`]).
  */
-export type ChatEmptyState = "no-vault" | "loading" | "no-server" | "no-model" | "ready";
+export type ChatEmptyState =
+  "no-vault" | "loading" | "no-server" | "no-model" | "ready";
 
 export function chatEmptyState(s: {
   hasVault: boolean;
@@ -179,12 +225,18 @@ export function chatEmptyState(s: {
 }
 
 /** `chatEmptyState` read off the app state. */
-export function chatStateOf(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): ChatEmptyState {
+export function chatStateOf(s: {
+  vaultRoot: string | null;
+  chatSetup: ChatSetup | null;
+}): ChatEmptyState {
   return chatEmptyState({ hasVault: s.vaultRoot !== null, setup: s.chatSetup });
 }
 
 /** Can a question be asked right now? */
-export function chatReady(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): boolean {
+export function chatReady(s: {
+  vaultRoot: string | null;
+  chatSetup: ChatSetup | null;
+}): boolean {
   return chatStateOf(s) === "ready";
 }
 
@@ -236,7 +288,9 @@ export const OLLAMA_CLOUD_URL = "https://docs.ollama.com/cloud";
 
 /** An installed model's detail, e.g. "3.2B · 2.0 GB". */
 export function modelDetail(m: OllamaModel): string {
-  return [m.parameters ?? "", formatModelSize(m.size)].filter(Boolean).join(" · ");
+  return [m.parameters ?? "", formatModelSize(m.size)]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** A model's on-disk size, for the installed list. */

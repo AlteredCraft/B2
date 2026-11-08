@@ -2,7 +2,7 @@
 //! ([`Vault::why_similar`], ADR-0022). Prompts and tool schemas live in [`crate::chat`].
 //! Chat is a reader: nothing model-derived is stored.
 
-use super::{AnswerView, Citation, ToolUseView, Vault};
+use super::{AnswerView, Citation, FocusView, ToolUseView, Vault};
 use crate::chat;
 use crate::db;
 use crate::discover;
@@ -18,41 +18,84 @@ impl Vault {
     /// A failed condense falls back to the raw question. `on_token` returning `Break`
     /// cancels. A hallucinated `[n]` resolves to nothing; the text is never rewritten.
     /// A failed answer call is [`Error::Llm`](crate::Error::Llm).
+    ///
+    /// `focus` is the note the user is looking at (GH #253): its first
+    /// [`chat::FOCUS_PASSAGES`] passages lead the numbering, the prompt says so, and
+    /// retrieval fills in from the rest of the vault. An unknown focus is
+    /// [`Error::NoteNotFound`], never a quietly unfocused answer.
     pub fn ask(
         &self,
         llm: &dyn LlmProvider,
         question: &str,
         history: &[ChatTurn],
+        focus: Option<&str>,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> Result<AnswerView> {
         let _op = tracing::debug_span!(
             target: "b2::vault",
             "ask",
             question,
-            multi_turn = !history.is_empty()
+            multi_turn = !history.is_empty(),
+            focus
         )
         .entered();
+        let focus = focus.map(|f| self.resolve_ref(f)).transpose()?;
+        let (focus_view, mut passages) = match &focus {
+            Some(path) => {
+                let (view, passages) = self.focus_passages(path)?;
+                (Some(view), passages)
+            }
+            None => (None, Vec::new()),
+        };
         let query = if history.is_empty() {
             question.to_string()
         } else {
-            chat::condense_query(llm, question, history)
+            chat::condense_query(llm, question, history, focus.as_deref())
         };
-        let passages: Vec<ContextPassage> = self
-            .search_chunks(&query, chat::ASK_PASSAGES)?
-            .into_iter()
-            .map(|c| ContextPassage {
-                path: c.path,
-                heading_path: c.heading_path,
-                text: c.text,
-            })
-            .collect();
+        // The focus note is already in hand, so a hit on it would number it twice.
+        passages.extend(
+            self.search_chunks(&query, chat::ASK_PASSAGES)?
+                .into_iter()
+                .filter(|c| focus.as_deref() != Some(c.path.as_str()))
+                .map(|c| ContextPassage {
+                    path: c.path,
+                    heading_path: c.heading_path,
+                    text: c.text,
+                }),
+        );
         tracing::debug!(
             target: "b2::chat",
             passages = passages.len(),
-            "retrieved grounding passages"
+            focused = focus_view.as_ref().map(|f| f.passages_shown),
+            "assembled grounding passages"
         );
-        let req = chat::build_request(question, history, passages);
-        self.stream_answer(llm, &req, on_token)
+        let req = chat::build_request(question, history, passages, focus_view.as_ref());
+        let mut view = self.stream_answer(llm, &req, on_token)?;
+        view.focus = focus_view;
+        Ok(view)
+    }
+
+    /// The focus note's passages from the top, capped at [`chat::FOCUS_PASSAGES`], and the
+    /// [`FocusView`] that says how many of how many that was.
+    fn focus_passages(&self, path: &str) -> Result<(FocusView, Vec<ContextPassage>)> {
+        let ids = db::note_chunk_ids(&self.conn, path)?;
+        let mut passages = Vec::new();
+        for id in ids.iter().take(chat::FOCUS_PASSAGES) {
+            // A row gone between the two reads is a torn reindex; skip, don't fail.
+            if let Some((heading_path, text)) = db::chunk_detail(&self.conn, *id)? {
+                passages.push(ContextPassage {
+                    path: path.to_string(),
+                    heading_path,
+                    text,
+                });
+            }
+        }
+        let view = FocusView {
+            path: path.to_string(),
+            passages_shown: passages.len(),
+            passages_total: ids.len(),
+        };
+        Ok((view, passages))
     }
 
     /// Why? on a Similar & unlinked row: a grounded, cited explanation of why
@@ -199,6 +242,7 @@ impl Vault {
             answer,
             cancelled,
             tools: tools_used,
+            focus: None,
         })
     }
 
@@ -452,6 +496,7 @@ impl Vault {
             answer: completion.text,
             cancelled: completion.cancelled,
             tools: Vec::new(),
+            focus: None,
         })
     }
 }

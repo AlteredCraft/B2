@@ -75,6 +75,7 @@ fn ask_grounds_the_answer_and_resolves_citations_end_to_end() {
             &FakeLlm,
             "forgetting curve",
             &[],
+            None,
             &mut stream_into(&mut streamed),
         )
         .unwrap();
@@ -111,7 +112,7 @@ fn breaking_mid_stream_reports_a_truncated_answer_honestly() {
     // Break on the third token: "Grounded", " in", " [1]" ← here.
     let mut seen = 0usize;
     let view = vault
-        .ask(&FakeLlm, "forgetting curve", &[], &mut |_tok| {
+        .ask(&FakeLlm, "forgetting curve", &[], None, &mut |_tok| {
             seen += 1;
             if seen == 3 {
                 ControlFlow::Break(())
@@ -132,7 +133,7 @@ fn breaking_mid_stream_reports_a_truncated_answer_honestly() {
 
     let mut first = true;
     let early = vault
-        .ask(&FakeLlm, "forgetting curve", &[], &mut |_tok| {
+        .ask(&FakeLlm, "forgetting curve", &[], None, &mut |_tok| {
             if first {
                 first = false;
                 ControlFlow::Continue(())
@@ -158,6 +159,7 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
             &counting,
             "forgetting curve",
             &[],
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -174,6 +176,7 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
             &counting,
             "tell me more about that",
             &history,
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -224,6 +227,7 @@ fn condensation_failure_degrades_to_the_raw_question() {
             },
             "quokka",
             &history,
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -242,6 +246,7 @@ fn condensation_failure_degrades_to_the_raw_question() {
             },
             "quokka",
             &history,
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -260,7 +265,13 @@ fn ask_answers_bm25_only_on_a_projected_but_unembedded_vault() {
     // No embedding space: retrieval is keyword-only (M4).
     let mut streamed = String::new();
     let view = vault
-        .ask(&FakeLlm, "forgetting", &[], &mut stream_into(&mut streamed))
+        .ask(
+            &FakeLlm,
+            "forgetting",
+            &[],
+            None,
+            &mut stream_into(&mut streamed),
+        )
         .unwrap();
     assert!(!view.cancelled);
     assert!(!view.citations.is_empty(), "chat keeps working unembedded");
@@ -314,6 +325,7 @@ fn a_hallucinated_marker_resolves_to_nothing_and_stays_in_the_text() {
             &Hallucinating,
             "forgetting curve",
             &[],
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -342,6 +354,7 @@ fn empty_retrieval_answers_no_evidence_rather_than_echoing() {
             &FakeLlm,
             "anything at all",
             &[],
+            None,
             &mut stream_into(&mut streamed),
         )
         .unwrap();
@@ -385,6 +398,7 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
             },
             "forgetting curve",
             &[],
+            None,
             &mut keep_streaming(),
         )
         .unwrap_err();
@@ -397,6 +411,7 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
             },
             "forgetting curve",
             &[],
+            None,
             &mut keep_streaming(),
         )
         .unwrap_err();
@@ -420,7 +435,7 @@ fn ask_shares_searchs_model_mismatch_fail_fast() {
 
     let swapped = Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(128))).unwrap();
     let err = swapped
-        .ask(&FakeLlm, "forgetting", &[], &mut keep_streaming())
+        .ask(&FakeLlm, "forgetting", &[], None, &mut keep_streaming())
         .unwrap_err();
     assert!(matches!(err, Error::ModelMismatch { .. }));
 }
@@ -445,7 +460,7 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
         ChatTurn::user("first question"),
         ChatTurn::assistant("first answer"),
     ];
-    let req = chat::build_request("second question", &history, passages);
+    let req = chat::build_request("second question", &history, passages, None);
 
     assert_eq!(req.turns.len(), 3);
     assert_eq!(req.turns[0].content, "first question");
@@ -501,4 +516,168 @@ fn cited_markers_keeps_real_markers_and_drops_everything_else() {
     );
 
     assert_eq!(chat::cited_markers("[1]", 0), Vec::<usize>::new());
+}
+
+// --- the focus note (GH #253) ------------------------------------------------------
+//
+// "This doc" means the note in front of the user. The adapter passes its path; the engine
+// hands the note's own passages over first, named in the prompt, and reports what it did.
+
+/// A note whose body chunks into well over `FOCUS_PASSAGES` passages.
+fn write_long_note(root: &std::path::Path, name: &str, sections: usize) {
+    let filler = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do. ".repeat(25);
+    let mut body = String::from("---\ntype: note\n---\n");
+    for i in 0..sections {
+        body.push_str(&format!("## Section {i}\n\n{filler}\n\n"));
+    }
+    fs::write(root.join(name), body).unwrap();
+}
+
+#[test]
+fn a_focus_note_leads_the_passages_and_is_cited_first() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = two_topic_vault(tmp.path());
+
+    // The question names nothing retrieval can match: only the focus grounds it.
+    let view = vault
+        .ask(
+            &FakeLlm,
+            "can you clean up this doc for me",
+            &[],
+            Some("quokka.md"),
+            &mut keep_streaming(),
+        )
+        .unwrap();
+
+    assert_ne!(view.answer, NO_EVIDENCE_ANSWER);
+    let first = view
+        .citations
+        .first()
+        .expect("the focus note is passage [1]");
+    assert_eq!((first.marker, first.path.as_str()), (1, "quokka.md"));
+    assert_eq!(
+        view.citations
+            .iter()
+            .filter(|c| c.path == "quokka.md")
+            .count(),
+        1,
+        "retrieval must not hand the focus note over a second time: {view:?}"
+    );
+    let focus = view
+        .focus
+        .expect("a focused answer says what it was focused on");
+    assert_eq!(focus.path, "quokka.md");
+    assert_eq!((focus.passages_shown, focus.passages_total), (1, 1));
+}
+
+#[test]
+fn an_unfocused_answer_carries_no_focus() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = two_topic_vault(tmp.path());
+    let view = vault
+        .ask(&FakeLlm, "capybara", &[], None, &mut keep_streaming())
+        .unwrap();
+    assert_eq!(view.focus, None);
+    let json = serde_json::to_value(&view).unwrap();
+    assert!(
+        json.get("focus").is_none(),
+        "the --json contract is unchanged without a focus: {json}"
+    );
+}
+
+#[test]
+fn focus_passages_are_capped_and_the_trim_is_reported_not_hidden() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    write_long_note(&root, "long.md", 60);
+    let vault = Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+
+    let view = vault
+        .ask(
+            &FakeLlm,
+            "summarise this note",
+            &[],
+            Some("long.md"),
+            &mut keep_streaming(),
+        )
+        .unwrap();
+
+    let focus = view.focus.expect("focused");
+    assert!(
+        focus.passages_total > chat::FOCUS_PASSAGES,
+        "the fixture must exceed the cap to test it: {}",
+        focus.passages_total
+    );
+    assert_eq!(focus.passages_shown, chat::FOCUS_PASSAGES);
+    assert_eq!(
+        view.citations
+            .iter()
+            .filter(|c| c.path == "long.md")
+            .count(),
+        chat::FOCUS_PASSAGES,
+        "exactly the cap's worth of the note was handed over"
+    );
+}
+
+#[test]
+fn an_unknown_focus_note_is_an_error_not_a_silently_unfocused_answer() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = two_topic_vault(tmp.path());
+    let err = vault
+        .ask(
+            &FakeLlm,
+            "what is this?",
+            &[],
+            Some("nope/missing.md"),
+            &mut keep_streaming(),
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::NoteNotFound(_)), "{err:?}");
+}
+
+#[test]
+fn the_focused_prompt_names_the_note_and_says_when_it_was_trimmed() {
+    let passages = vec![ContextPassage {
+        path: "quokka.md".into(),
+        heading_path: None,
+        text: "The quokka is a small wallaby.".into(),
+    }];
+    let whole = b2_core::vault::FocusView {
+        path: "quokka.md".into(),
+        passages_shown: 1,
+        passages_total: 1,
+    };
+    let req = chat::build_request("clean up this doc", &[], passages.clone(), Some(&whole));
+    let msg = req.system_message();
+    assert!(
+        msg.starts_with(GROUNDED_SYSTEM_PROMPT),
+        "the grounding rules come first"
+    );
+    assert!(msg.contains("quokka.md"), "{msg}");
+    assert!(
+        msg.contains("[1]"),
+        "the note's passages are pointed at by marker: {msg}"
+    );
+    assert!(
+        !msg.contains("only the first"),
+        "nothing trimmed, nothing claimed: {msg}"
+    );
+
+    let trimmed = b2_core::vault::FocusView {
+        passages_shown: 1,
+        passages_total: 40,
+        ..whole
+    };
+    let msg = chat::build_request("x", &[], passages, Some(&trimmed)).system_message();
+    assert!(msg.contains("only the first 1 of 40"), "{msg}");
+
+    // Without a focus the prompt is byte-identical to before.
+    let plain = chat::build_request("x", &[], Vec::new(), None);
+    assert_eq!(plain.system, GROUNDED_SYSTEM_PROMPT);
+
+    // Condensation gets the same hint, so a follow-up's "it" can mean the note.
+    assert!(chat::condense_system_prompt(Some("quokka.md")).contains("quokka.md"));
+    assert_eq!(chat::condense_system_prompt(None), CONDENSE_SYSTEM_PROMPT);
 }
