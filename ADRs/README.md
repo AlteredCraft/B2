@@ -34,3 +34,4 @@ records say *why* an entry reads the way it does.
 | [0020](0020-embeddings-inside-the-single-binary.md) | Embeddings inside the single binary: candle + hf-hub, provisioned by `b2 init` |
 | [0021](0021-concurrency-is-serialized-on-sqlites-own-locks.md) | Many readers, one writer, serialized on SQLite's own locks |
 | [0022](0022-the-chat-seam-carries-tool-calls-for-bounded-turns.md) | The chat seam carries tool calls; a tool-using turn is bounded and degrades |
+| [0023](0023-chat-proposes-edits-the-human-lands-them.md) | Chat proposes edits; the human lands them, and every landed edit is reversible |
