@@ -68,6 +68,17 @@ fn focus_paragraph(focus: &FocusView) -> String {
             focus.passages_shown, focus.passages_total
         ));
     }
+    if focus.passages_shown > 0 {
+        // A request about the open note is usually work on its text, not a question the
+        // text answers. Without this, a grounded model reads "clean up this note" as
+        // unsupported and refuses (GH #253).
+        out.push_str(
+            " A request to summarise, clean up, rewrite, outline, shorten or otherwise work \
+             on this note is a task to do with its text: do it, using only what the passages \
+             say, and cite the passages you drew on. Reserve the no-evidence reply for a \
+             question these passages genuinely do not cover.",
+        );
+    }
     out
 }
 

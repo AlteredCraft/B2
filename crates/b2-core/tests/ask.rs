@@ -664,6 +664,19 @@ fn the_focused_prompt_names_the_note_and_says_when_it_was_trimmed() {
         !msg.contains("only the first"),
         "nothing trimmed, nothing claimed: {msg}"
     );
+    // "Clean up this note" is work on the text, not a question the text answers; without
+    // this sentence a grounded model refuses it (seen with gemma4, GH #253).
+    assert!(msg.contains("is a task to do with its text"), "{msg}");
+
+    // An unindexed focus has no text to work on, so no such instruction.
+    let empty = b2_core::vault::FocusView {
+        path: "quokka.md".into(),
+        passages_shown: 0,
+        passages_total: 0,
+    };
+    let msg = chat::build_request("x", &[], Vec::new(), Some(&empty)).system_message();
+    assert!(msg.contains("None of its text is indexed yet"), "{msg}");
+    assert!(!msg.contains("is a task to do with its text"), "{msg}");
 
     let trimmed = b2_core::vault::FocusView {
         passages_shown: 1,
