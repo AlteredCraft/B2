@@ -19,16 +19,16 @@ impl Vault {
     /// cancels. A hallucinated `[n]` resolves to nothing; the text is never rewritten.
     /// A failed answer call is [`Error::Llm`](crate::Error::Llm).
     ///
-    /// `focus` is the note the user is viewing (GH #253): its first
-    /// [`chat::FOCUS_PASSAGES`] passages are numbered first and the prompt names it, so
-    /// "this doc" has a referent. An unknown ref is [`Error::NoteNotFound`], before any
-    /// model call. `None` sends exactly the unfocused request.
+    /// `focus` is the note the user is viewing (GH #253): its first `max_passages`
+    /// passages are numbered first and the prompt names it, so "this doc" has a referent.
+    /// An unknown ref is [`Error::NoteNotFound`], before any model call. `None` sends
+    /// exactly the unfocused request.
     pub fn ask(
         &self,
         llm: &dyn LlmProvider,
         question: &str,
         history: &[ChatTurn],
-        focus: Option<&str>,
+        focus: Option<chat::FocusRequest<'_>>,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> Result<AnswerView> {
         let _op = tracing::debug_span!(
@@ -36,12 +36,13 @@ impl Vault {
             "ask",
             question,
             multi_turn = !history.is_empty(),
-            focus
+            focus = focus.map(|f| f.note),
+            focus_cap = focus.map(|f| f.max_passages)
         )
         .entered();
         let (focus, lead) = match focus {
-            Some(note_ref) => {
-                let (f, lead) = self.focus_passages(note_ref)?;
+            Some(request) => {
+                let (f, lead) = self.focus_passages(request)?;
                 (Some(f), lead)
             }
             None => (None, Vec::new()),
@@ -78,15 +79,18 @@ impl Vault {
         self.stream_answer(llm, &req, on_token)
     }
 
-    /// The focus note's first [`chat::FOCUS_PASSAGES`] passages in order, as `b2_read`
-    /// reads them, and how many it has in all.
-    fn focus_passages(&self, note_ref: &str) -> Result<(chat::Focus, Vec<ContextPassage>)> {
-        let path = self.resolve_ref(note_ref)?;
+    /// The focus note's first `max_passages` passages in order, as `b2_read` reads them,
+    /// and how many it has in all.
+    fn focus_passages(
+        &self,
+        request: chat::FocusRequest<'_>,
+    ) -> Result<(chat::Focus, Vec<ContextPassage>)> {
+        let path = self.resolve_ref(request.note)?;
         let ids = db::note_chunk_ids(&self.conn, &path)?;
         // A missing row is a torn read (C1); the passage is skipped, not an error.
         let passages = ids
             .iter()
-            .take(chat::FOCUS_PASSAGES)
+            .take(request.max_passages)
             .filter_map(|id| db::chunk_detail(&self.conn, *id).transpose())
             .map(|detail| {
                 detail.map(|(heading_path, text)| ContextPassage {

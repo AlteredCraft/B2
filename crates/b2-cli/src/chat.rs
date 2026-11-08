@@ -4,7 +4,8 @@
 use crate::args::{Cli, LlmArgs};
 use crate::cancel::{cancel_flow, install_cancel_on_sigint, while_answering};
 use crate::error::{user_message, CliError};
-use crate::wiring::{open_llm, open_vault};
+use crate::wiring::{llm_config, open_llm, open_vault};
+use b2_core::chat::FocusRequest;
 use b2_core::llm::{ChatTurn, LlmProvider};
 use b2_core::vault::{AnswerView, Vault};
 use std::io::{IsTerminal, Write};
@@ -13,11 +14,16 @@ use std::ops::ControlFlow;
 pub fn cmd_ask(
     cli: &Cli,
     question: &str,
-    focus: Option<&str>,
+    note: Option<&str>,
     llm_args: &LlmArgs,
 ) -> Result<(), CliError> {
+    let config = llm_config(llm_args);
+    let focus = note.map(|note| FocusRequest {
+        note,
+        max_passages: config.focus_passages,
+    });
     // The provider first: a stopped server should cost a round trip, not a model load.
-    let llm = open_llm(llm_args)?;
+    let llm = open_llm(config)?;
     // Retrieval embeds the question, so the real model.
     let vault = open_vault(cli.vault_or_cwd(), true)?;
     // Ctrl-C cancels at the next token; what streamed stays, reported as partial.
@@ -36,7 +42,7 @@ pub fn cmd_why(
     limit: usize,
     llm_args: &LlmArgs,
 ) -> Result<(), CliError> {
-    let llm = open_llm(llm_args)?;
+    let llm = open_llm(llm_config(llm_args))?;
     // Stored vectors only, like `similar`: no model load.
     let vault = open_vault(cli.vault_or_cwd(), false)?;
     install_cancel_on_sigint(false);
@@ -51,8 +57,13 @@ pub fn cmd_why(
     Ok(())
 }
 
-pub fn cmd_chat(cli: &Cli, focus: Option<&str>, llm_args: &LlmArgs) -> Result<(), CliError> {
-    let llm = open_llm(llm_args)?;
+pub fn cmd_chat(cli: &Cli, note: Option<&str>, llm_args: &LlmArgs) -> Result<(), CliError> {
+    let config = llm_config(llm_args);
+    let focus = note.map(|note| FocusRequest {
+        note,
+        max_passages: config.focus_passages,
+    });
+    let llm = open_llm(config)?;
     let vault = open_vault(cli.vault_or_cwd(), true)?;
     // Mid-answer Ctrl-C cancels the stream; at an idle prompt it leaves.
     install_cancel_on_sigint(true);
@@ -68,7 +79,7 @@ pub fn cmd_chat(cli: &Cli, focus: Option<&str>, llm_args: &LlmArgs) -> Result<()
              Nothing here is saved.",
             llm.model_id()
         );
-        if let Some(note) = focus {
+        if let Some(note) = note {
             eprintln!("About: {note}. \"This note\" in a question means it.");
         }
     }
@@ -117,7 +128,7 @@ fn ask_streamed(
     llm: &dyn LlmProvider,
     question: &str,
     history: &[ChatTurn],
-    focus: Option<&str>,
+    focus: Option<FocusRequest<'_>>,
     json: bool,
 ) -> Result<AnswerView, CliError> {
     let answer = vault.ask(llm, question, history, focus, &mut |token| {

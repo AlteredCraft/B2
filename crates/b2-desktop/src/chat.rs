@@ -28,6 +28,9 @@ pub struct ChatPrefs {
     /// The tool-call cap the user set, if any (`LlmConfig::max_tool_calls`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<usize>,
+    /// The focus-passage cap the user set, if any (`LlmConfig::focus_passages`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_passages: Option<usize>,
     /// The bearer token in force for this run. `skip` both ways: it can never reach the
     /// file, and a file naming it can't install one.
     #[serde(skip)]
@@ -46,6 +49,7 @@ impl std::fmt::Debug for ChatPrefs {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("max_tool_calls", &self.max_tool_calls)
+            .field("focus_passages", &self.focus_passages)
             .field(
                 "api_key",
                 &match self.api_key {
@@ -65,6 +69,7 @@ impl ChatPrefs {
         LlmConfig::from_env()
             .with_overrides(self.base_url.as_deref(), self.model.as_deref())
             .with_max_tool_calls(self.max_tool_calls)
+            .with_focus_passages(self.focus_passages)
             .with_api_key(self.api_key.as_deref(), self.api_key_source())
     }
 
@@ -142,10 +147,26 @@ pub fn apply_key(
 /// that doesn't mention it can't reset it. A value `b2_llm::parse_max_tool_calls` refuses
 /// leaves the cap as it stood.
 pub fn apply_tool_cap(prev: &ChatPrefs, typed: Option<&str>) -> Option<usize> {
+    apply_cap(prev.max_tool_calls, typed, b2_llm::parse_max_tool_calls)
+}
+
+/// Apply a save's focus-cap field by [`apply_tool_cap`]'s rule, judged by
+/// `b2_llm::parse_focus_passages`.
+pub fn apply_focus_cap(prev: &ChatPrefs, typed: Option<&str>) -> Option<usize> {
+    apply_cap(prev.focus_passages, typed, b2_llm::parse_focus_passages)
+}
+
+/// The three-state rule both cap fields share: untouched keeps, blank clears, a refused
+/// value keeps.
+fn apply_cap(
+    prev: Option<usize>,
+    typed: Option<&str>,
+    parse: fn(&str) -> Option<usize>,
+) -> Option<usize> {
     match typed.map(str::trim) {
-        None => prev.max_tool_calls,
+        None => prev,
         Some("") => None,
-        Some(raw) => b2_llm::parse_max_tool_calls(raw).or(prev.max_tool_calls),
+        Some(raw) => parse(raw).or(prev),
     }
 }
 
@@ -239,6 +260,55 @@ mod tests {
             assert_eq!(
                 apply_tool_cap(&held, Some(refused)),
                 Some(128),
+                "{refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_focus_cap_persists_and_layers_over_the_shared_resolution() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("chat.json");
+        let prefs = ChatPrefs {
+            focus_passages: Some(3),
+            ..ChatPrefs::default()
+        };
+        write_prefs_to(&file, &prefs).unwrap();
+        let back = read_prefs_from(Some(&file), &MemoryStore::empty());
+        assert_eq!(back.focus_passages, Some(3));
+        assert_eq!(back.config().focus_passages, 3);
+
+        write_prefs_to(&file, &ChatPrefs::default()).unwrap();
+        assert!(!std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("focus_passages"));
+        assert_eq!(
+            ChatPrefs::default().config().focus_passages,
+            LlmConfig::from_env().focus_passages
+        );
+
+        std::fs::write(&file, r#"{"focus_passages": 1000000}"#).unwrap();
+        let edited = read_prefs_from(Some(&file), &MemoryStore::empty());
+        assert_eq!(
+            edited.config().focus_passages,
+            LlmConfig::from_env().focus_passages,
+            "a hand-edited file can't lift the ceiling"
+        );
+    }
+
+    #[test]
+    fn the_focus_cap_field_is_untouched_cleared_or_set() {
+        let held = ChatPrefs {
+            focus_passages: Some(3),
+            ..ChatPrefs::default()
+        };
+        assert_eq!(apply_focus_cap(&held, None), Some(3), "untouched");
+        assert_eq!(apply_focus_cap(&held, Some("  ")), None, "cleared");
+        assert_eq!(apply_focus_cap(&held, Some(" 16 ")), Some(16), "set");
+        for refused in ["0", "lots", "-3", "65"] {
+            assert_eq!(
+                apply_focus_cap(&held, Some(refused)),
+                Some(3),
                 "{refused:?}"
             );
         }

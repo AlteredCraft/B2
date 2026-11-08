@@ -189,28 +189,39 @@ pub struct ChatSetup {
     /// The Ollama-native onboarding half; `None` for any other runtime.
     pub ollama: Option<OllamaSetup>,
     /// The tool-call cap, as a Settings field needs it.
-    pub tool_calls: ToolCallCap,
+    pub tool_calls: CapSetting,
+    /// The focus-passage cap (GH #253), as a Settings field needs it.
+    pub focus_passages: CapSetting,
 }
 
-/// [`LlmConfig::max_tool_calls`] for a surface that edits it, with its default and ceiling
-/// so the frontend never advertises a range the parser would refuse.
+/// One numeric chat cap for a surface that edits it, with its default and ceiling so the
+/// frontend never advertises a range the parser would refuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ToolCallCap {
+pub struct CapSetting {
     /// The cap in force: Settings over the environment over the default.
     pub in_force: usize,
-    /// [`crate::DEFAULT_MAX_TOOL_CALLS`].
+    /// What clearing the field returns to, absent an environment override.
     pub default: usize,
-    /// [`crate::MAX_TOOL_CALLS_CEILING`].
+    /// The highest value any source may set.
     pub ceiling: usize,
 }
 
-impl ToolCallCap {
-    /// The cap as `config` resolves it.
-    pub fn of(config: &LlmConfig) -> Self {
+impl CapSetting {
+    /// [`LlmConfig::max_tool_calls`] as `config` resolves it.
+    pub fn tool_calls(config: &LlmConfig) -> Self {
         Self {
             in_force: config.max_tool_calls,
             default: crate::DEFAULT_MAX_TOOL_CALLS,
             ceiling: crate::MAX_TOOL_CALLS_CEILING,
+        }
+    }
+
+    /// [`LlmConfig::focus_passages`] as `config` resolves it.
+    pub fn focus_passages(config: &LlmConfig) -> Self {
+        Self {
+            in_force: config.focus_passages,
+            default: crate::DEFAULT_FOCUS_PASSAGES,
+            ceiling: crate::FOCUS_PASSAGES_CEILING,
         }
     }
 }
@@ -227,7 +238,8 @@ impl ChatSetup {
             message: Some(FAKE_NOTICE.to_string()),
             available: Vec::new(),
             ollama: None,
-            tool_calls: ToolCallCap::of(config),
+            tool_calls: CapSetting::tool_calls(config),
+            focus_passages: CapSetting::focus_passages(config),
         }
     }
 }
@@ -277,7 +289,8 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
         message,
         available,
         ollama,
-        tool_calls: ToolCallCap::of(config),
+        tool_calls: CapSetting::tool_calls(config),
+        focus_passages: CapSetting::focus_passages(config),
     }
 }
 
@@ -633,12 +646,17 @@ mod tests {
             message: None,
             available: Vec::new(),
             ollama: None,
-            tool_calls: ToolCallCap::of(&config),
+            tool_calls: CapSetting::tool_calls(&config),
+            focus_passages: CapSetting::focus_passages(&config),
         };
         let json = serde_json::to_string(&setup).unwrap();
         assert!(!json.contains("sk-live-do-not-serialize-me"), "{json}");
         assert!(
             json.contains("\"tool_calls\":{\"in_force\":64,\"default\":64,\"ceiling\":4096}"),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"focus_passages\":{\"in_force\":8,\"default\":8,\"ceiling\":64}"),
             "{json}"
         );
         assert!(json.contains("\"api_key_source\":\"stored\""), "{json}");

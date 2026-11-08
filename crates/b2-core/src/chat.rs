@@ -17,9 +17,20 @@ use std::ops::ControlFlow;
 /// so chat adds no new candidate width (GH #141/#142).
 pub const ASK_PASSAGES: usize = 10;
 
-/// How many of the focus note's own passages lead an ask, in order (GH #253). Retrieval at
-/// [`ASK_PASSAGES`] follows them, so a long note can't crowd out the rest of the vault.
+/// The default for how many of the focus note's own passages lead an ask, in order (GH
+/// #253). Retrieval at [`ASK_PASSAGES`] follows them, so a long note can't crowd out the
+/// rest of the vault. The adapters pass the cap in force ([`FocusRequest::max_passages`]).
 pub const FOCUS_PASSAGES: usize = 8;
+
+/// What an adapter asks to focus on: the note being viewed and the cap in force. A
+/// short-lived, `Copy`, read-only view passed into one `Vault::ask` call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FocusRequest<'a> {
+    /// A note reference, `.md` optional, resolved as every façade ref is.
+    pub note: &'a str,
+    /// How many of its passages lead the request; [`FOCUS_PASSAGES`] by default.
+    pub max_passages: usize,
+}
 
 /// The grounded system prompt (flow ④ step 2). Its no-evidence sentence must stay
 /// [`crate::llm::NO_EVIDENCE_ANSWER`] verbatim; the suite pins it.
@@ -40,7 +51,7 @@ any pronouns or references. Reply with the query text only — no preamble, no q
 pub struct Focus {
     /// Vault-relative path, the note's identity (L1).
     pub path: String,
-    /// How many of its passages lead the request: at most [`FOCUS_PASSAGES`].
+    /// How many of its passages lead the request: at most [`FocusRequest::max_passages`].
     pub included: usize,
     /// How many passages the note has.
     pub total: usize,

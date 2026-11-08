@@ -139,12 +139,14 @@ export interface ChatSetup {
   ollama: OllamaSetup | null;
   /** The tool-call cap and its bounds, from the host so Settings can't advertise a range
    *  the parser refuses. */
-  tool_calls: ToolCallCap;
+  tool_calls: CapSetting;
+  /** How many of the open note's passages lead a focused ask (GH #253), with its bounds. */
+  focus_passages: CapSetting;
 }
 
-/** `b2-llm`'s `ToolCallCap`: the most tool calls one model reply may make. */
-export interface ToolCallCap {
-  /** The cap in force — Settings over `B2_LLM_MAX_TOOL_CALLS` over the default. */
+/** `b2-llm`'s `CapSetting`: one numeric chat cap as a Settings field needs it. */
+export interface CapSetting {
+  /** The cap in force — Settings over its environment variable over the default. */
   in_force: number;
   /** What clearing the field returns to, absent an environment override. */
   default: number;

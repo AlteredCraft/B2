@@ -16,7 +16,7 @@ use serde::Serialize;
 pub use provider::OpenAiCompatProvider;
 pub use setup::{
     model_missing_message, probe_setup, pull_command, refusal_message, unreachable_message,
-    ChatSetup, ChatState, ModelTier, OllamaModel, OllamaSetup, ToolCallCap, MODEL_TIERS,
+    CapSetting, ChatSetup, ChatState, ModelTier, OllamaModel, OllamaSetup, MODEL_TIERS,
     OLLAMA_INSTALL_URL,
 };
 
@@ -92,6 +92,30 @@ fn is_valid_tool_call_cap(n: usize) -> bool {
     (1..=MAX_TOOL_CALLS_CEILING).contains(&n)
 }
 
+/// Environment variable for [`LlmConfig::focus_passages`].
+pub const ENV_FOCUS_PASSAGES: &str = "B2_LLM_FOCUS_PASSAGES";
+
+/// The default for [`LlmConfig::focus_passages`]: the engine's own default.
+pub const DEFAULT_FOCUS_PASSAGES: usize = b2_core::chat::FOCUS_PASSAGES;
+
+/// The highest [`LlmConfig::focus_passages`] from any source: past it, one note would fill
+/// a small model's context before retrieval had a say.
+pub const FOCUS_PASSAGES_CEILING: usize = 64;
+
+/// Parse a focus-passage cap, for both [`ENV_FOCUS_PASSAGES`] and the Settings field: a
+/// whole number from 1 to [`FOCUS_PASSAGES_CEILING`].
+pub fn parse_focus_passages(raw: &str) -> Option<usize> {
+    raw.trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| is_valid_focus_cap(n))
+}
+
+/// 1 (zero would focus on nothing) to [`FOCUS_PASSAGES_CEILING`].
+fn is_valid_focus_cap(n: usize) -> bool {
+    (1..=FOCUS_PASSAGES_CEILING).contains(&n)
+}
+
 /// Where the bearer token in force came from: a fact about the key, safe to show and log
 /// (GH #176). [`Environment`](Self::Environment) outranks a remembered key
 /// ([`LlmConfig::with_api_key`]).
@@ -124,6 +148,9 @@ pub struct LlmConfig {
     /// The most tool calls (and highest call `index`) one reply may make; past it,
     /// [`LlmError::TooManyToolCalls`]. A memory bound, not a tuning knob.
     pub max_tool_calls: usize,
+    /// How many of the open note's passages lead a focused ask (GH #253); a note longer
+    /// than this is trimmed, and the prompt says so.
+    pub focus_passages: usize,
 }
 
 /// Hand-written so the key can never be logged; only its presence is printed.
@@ -141,6 +168,7 @@ impl std::fmt::Debug for LlmConfig {
             )
             .field("api_key_source", &self.api_key_source)
             .field("max_tool_calls", &self.max_tool_calls)
+            .field("focus_passages", &self.focus_passages)
             .finish()
     }
 }
@@ -154,13 +182,15 @@ impl Default for LlmConfig {
             api_key: None,
             api_key_source: ApiKeySource::None,
             max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
+            focus_passages: DEFAULT_FOCUS_PASSAGES,
         }
     }
 }
 
 impl LlmConfig {
     /// The defaults overlaid with [`ENV_URL`] / [`ENV_MODEL`] / [`ENV_API_KEY`] /
-    /// [`ENV_MAX_TOOL_CALLS`], the one base both adapters layer over. Blank reads as unset.
+    /// [`ENV_MAX_TOOL_CALLS`] / [`ENV_FOCUS_PASSAGES`], the one base both adapters layer
+    /// over. Blank reads as unset.
     pub fn from_env() -> Self {
         Self::resolve(|key| std::env::var(key).ok())
     }
@@ -176,18 +206,32 @@ impl LlmConfig {
         let base = Self::default();
         let api_key = read(ENV_API_KEY);
         // An invalid cap is a typo: keep the default, and say so.
-        let max_tool_calls = match read(ENV_MAX_TOOL_CALLS) {
-            None => base.max_tool_calls,
-            Some(raw) => parse_max_tool_calls(&raw).unwrap_or_else(|| {
-                tracing::warn!(
-                    target: "b2::llm",
-                    value = raw,
-                    default = base.max_tool_calls,
-                    "{ENV_MAX_TOOL_CALLS} is not a whole number from 1 to {MAX_TOOL_CALLS_CEILING}; using the default"
-                );
-                base.max_tool_calls
-            }),
+        let cap = |env: &str, ceiling: usize, default: usize, parse: fn(&str) -> Option<usize>| {
+            match read(env) {
+                None => default,
+                Some(raw) => parse(&raw).unwrap_or_else(|| {
+                    tracing::warn!(
+                        target: "b2::llm",
+                        value = raw,
+                        default,
+                        "{env} is not a whole number from 1 to {ceiling}; using the default"
+                    );
+                    default
+                }),
+            }
         };
+        let max_tool_calls = cap(
+            ENV_MAX_TOOL_CALLS,
+            MAX_TOOL_CALLS_CEILING,
+            base.max_tool_calls,
+            parse_max_tool_calls,
+        );
+        let focus_passages = cap(
+            ENV_FOCUS_PASSAGES,
+            FOCUS_PASSAGES_CEILING,
+            base.focus_passages,
+            parse_focus_passages,
+        );
         Self {
             base_url: read(ENV_URL).unwrap_or(base.base_url),
             model: read(ENV_MODEL).unwrap_or(base.model),
@@ -197,6 +241,7 @@ impl LlmConfig {
             },
             api_key,
             max_tool_calls,
+            focus_passages,
         }
     }
 
@@ -220,6 +265,16 @@ impl LlmConfig {
     pub fn with_max_tool_calls(mut self, max_tool_calls: Option<usize>) -> Self {
         if let Some(n) = max_tool_calls.filter(|&n| is_valid_tool_call_cap(n)) {
             self.max_tool_calls = n;
+        }
+        self
+    }
+
+    /// Lay an adapter's focus-passage cap over this config, as
+    /// [`with_max_tool_calls`](Self::with_max_tool_calls) does. An invalid value is ignored.
+    #[must_use]
+    pub fn with_focus_passages(mut self, focus_passages: Option<usize>) -> Self {
+        if let Some(n) = focus_passages.filter(|&n| is_valid_focus_cap(n)) {
+            self.focus_passages = n;
         }
         self
     }
@@ -355,6 +410,56 @@ mod tests {
     }
 
     #[test]
+    fn the_focus_cap_comes_from_the_environment_and_a_bad_value_keeps_the_default() {
+        let with = |value: Option<&str>| {
+            LlmConfig::resolve(|key| {
+                (key == ENV_FOCUS_PASSAGES)
+                    .then(|| value.map(str::to_string))
+                    .flatten()
+            })
+            .focus_passages
+        };
+        assert_eq!(with(None), DEFAULT_FOCUS_PASSAGES);
+        assert_eq!(DEFAULT_FOCUS_PASSAGES, b2_core::chat::FOCUS_PASSAGES);
+        assert_eq!(with(Some("3")), 3);
+        assert_eq!(with(Some(" 16 ")), 16);
+        for bad in ["0", "-1", "lots", "6.4", "", "65"] {
+            assert_eq!(with(Some(bad)), DEFAULT_FOCUS_PASSAGES, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn one_parser_judges_the_focus_cap_for_the_environment_and_for_settings() {
+        assert_eq!(parse_focus_passages("3"), Some(3));
+        assert_eq!(parse_focus_passages(" 16 "), Some(16));
+        assert_eq!(
+            parse_focus_passages(&FOCUS_PASSAGES_CEILING.to_string()),
+            Some(FOCUS_PASSAGES_CEILING)
+        );
+        assert_eq!(
+            parse_focus_passages(&(FOCUS_PASSAGES_CEILING + 1).to_string()),
+            None
+        );
+        for bad in ["0", "-1", "lots", "6.4", ""] {
+            assert_eq!(parse_focus_passages(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_adapters_focus_cap_beats_the_environments_and_none_keeps_it() {
+        let env = LlmConfig::resolve(|key| (key == ENV_FOCUS_PASSAGES).then(|| "3".to_string()));
+        assert_eq!(env.focus_passages, 3);
+        assert_eq!(env.clone().with_focus_passages(Some(12)).focus_passages, 12);
+        assert_eq!(env.clone().with_focus_passages(None).focus_passages, 3);
+        assert_eq!(env.clone().with_focus_passages(Some(0)).focus_passages, 3);
+        assert_eq!(
+            env.with_focus_passages(Some(FOCUS_PASSAGES_CEILING + 1))
+                .focus_passages,
+            3
+        );
+    }
+
+    #[test]
     fn debug_never_prints_the_api_key() {
         let config = LlmConfig {
             base_url: "https://api.example.com/v1".into(),
@@ -372,6 +477,7 @@ mod tests {
         assert!(rendered.contains("redacted"), "{rendered}");
         assert!(rendered.contains("api.example.com"), "{rendered}");
         assert!(rendered.contains("Stored"), "{rendered}");
+        assert!(rendered.contains("focus_passages: 8"), "{rendered}");
         assert!(
             format!("{:?}", LlmConfig::default()).contains("api_key: \"None\""),
             "the local configuration says so plainly"

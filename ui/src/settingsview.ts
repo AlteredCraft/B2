@@ -125,6 +125,7 @@ function chatPanelHtml(state: AppState): string {
       ${chatModelFieldHtml(state, setup)}
       ${key}
       ${toolCapFieldHtml(setup)}
+      ${focusCapFieldHtml(setup)}
       <div class="settings-action">
         <button class="btn small primary" id="settings-chat-save">Save and test</button>
       </div>
@@ -147,6 +148,24 @@ function toolCapFieldHtml(setup: ChatSetup | null): string {
         reply when it explains a suggestion. A reply that asks for more is stopped with an
         error instead of being run. Default ${cap.default}, up to ${cap.ceiling}; clear the
         field to go back to the default. Overrides <code>B2_LLM_MAX_TOOL_CALLS</code>.</p>`;
+}
+
+/**
+ * Focus passages (`LlmConfig::focus_passages`, GH #253): how much of the open note leads a
+ * question about it, validated by chat.ts's `focusCapInput`. A text input for the same
+ * reason as `toolCapFieldHtml`.
+ */
+function focusCapFieldHtml(setup: ChatSetup | null): string {
+  if (!setup) return "";
+  const cap = setup.focus_passages;
+  return `<label class="field">Focus passages
+        <input id="settings-chat-focus-cap" type="text" inputmode="numeric" autocomplete="off"
+          spellcheck="false" value="${cap.in_force}" placeholder="${cap.default}" />
+      </label>
+      <p class="settings-detail muted">How many passages of the open note chat reads first,
+        in order, before searching the rest of the vault. A longer note is cut there, and the
+        model is told so. Default ${cap.default}, up to ${cap.ceiling}; clear the field to go
+        back to the default. Overrides <code>B2_LLM_FOCUS_PASSAGES</code>.</p>`;
 }
 
 /**

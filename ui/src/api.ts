@@ -265,17 +265,18 @@ export const api = {
 
   /**
    * Save the chat configuration and re-probe it (adapter state; no reindex, contrast M2).
-   * `apiKey` and `maxToolCalls` are three-state: `null` keeps what is in force, `""` clears,
-   * a value sets. The key never comes back; the setup carries `api_key_source`
-   * (`b2-desktop/src/keychain.rs`).
+   * `apiKey`, `maxToolCalls` and `focusPassages` are three-state: `null` keeps what is in
+   * force, `""` clears, a value sets. The key never comes back; the setup carries
+   * `api_key_source` (`b2-desktop/src/keychain.rs`).
    */
   setChatConfig: (
     baseUrl: string | null,
     model: string | null,
     apiKey: string | null,
     maxToolCalls: string | null = null,
+    focusPassages: string | null = null,
   ): Promise<ChatSetup> =>
-    invoke("set_chat_config", { baseUrl, model, apiKey, maxToolCalls }),
+    invoke("set_chat_config", { baseUrl, model, apiKey, maxToolCalls, focusPassages }),
 
   /** The embedding models B2 offers, flagged current + installed (Settings picker). */
   listModels: (): Promise<ModelChoice[]> => invoke("list_models"),

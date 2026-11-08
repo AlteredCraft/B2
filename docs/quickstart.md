@@ -346,8 +346,9 @@ Sources:
 ```
 
 `--note PATH` says which note the question is about, so "this note" and "this doc" have a
-referent. That note's passages come first (up to 8, in order; the model is told when a long
-note was cut short), then the usual retrieval fills in from the rest of the vault:
+referent. That note's passages come first (up to 8, in order, set by
+`B2_LLM_FOCUS_PASSAGES`; the model is told when a long note was cut short), then the usual
+retrieval fills in from the rest of the vault:
 
 ```console
 $ b2 ask --note notes/spaced-repetition.md "what is this note missing?"
@@ -498,6 +499,7 @@ they are, `search` refuses rather than mixing embedding spaces.
 | `B2_LLM_URL` / `B2_LLM_MODEL` | The OpenAI-compatible chat endpoint + model for `ask`/`chat` (defaults: `http://localhost:11434/v1`, Ollama's, and `gemma4:e2b`). The `--llm-url`/`--llm-model` flags beat the env, which beats the default |
 | `B2_LLM_API_KEY` | Bearer token for a cloud chat endpoint. An env var, never a flag, because a key in a flag is a key in `ps`. The desktop stores its key in the macOS Keychain instead |
 | `B2_LLM=fake` | The deterministic chat provider: `B2_EMBEDDER=fake`'s sibling for `ask`/`chat` |
+| `B2_LLM_FOCUS_PASSAGES` | How many of the focus note's passages lead `ask --note`, `chat --note` and the desktop's chat about the open note (default 8, allowed 1 to 64). A longer note is cut there, and the model is told how many it got. An invalid value keeps the default and logs a warning. The desktop's Settings → Chat field overrides it |
 | `B2_LLM_MAX_TOOL_CALLS` | The most tool calls one model reply may carry in `b2 why` (default 64, allowed 1 to 4096). A reply over the cap fails with its own message rather than being cut short. An invalid value keeps the default and logs a warning. The desktop's Settings → Chat field overrides it |
 | `B2_DEBUG` | Print internal error detail after the generic user-facing message |
 | `B2_LOG` | Structured debug logging: JSON Lines on stderr (stdout stays pure data), ready for jq/DuckDB/pandas. Takes a tracing filter (`debug`, `b2::sqlite=debug`, `warn`). Includes per-statement SQLite timings; `B2_DEBUG` or `B2_LOG_FILE` alone implies `b2=debug` (B2's own targets only, so Tauri and HTTP records stay out) |

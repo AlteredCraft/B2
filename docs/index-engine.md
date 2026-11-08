@@ -535,7 +535,8 @@ swapping chat models never touches the index, so a provider swap is a URL or con
    query. On failure it degrades to the raw question, so this step can never break chat.
 2. **Retrieve.** `search_chunks` at `ASK_PASSAGES = 10`: the §4 pipeline unchanged, BM25-only
    fallback included. With a **focus** note (the one being viewed, GH #253), its first
-   `FOCUS_PASSAGES = 8` passages (`db::note_chunk_ids` + `chunk_detail`) are numbered first and
+   `max_passages` passages (`db::note_chunk_ids` + `chunk_detail`; the adapter passes
+   `LlmConfig::focus_passages`, default `FOCUS_PASSAGES = 8`) are numbered first and
    retrieval's passages follow, minus repeats; the prompt, and the condense prompt, name the
    note, and a note cut short by the cap says so in one line. No focus, no change.
 3. **Assemble.** The grounded system prompt plus numbered passages. Prompt assembly is core

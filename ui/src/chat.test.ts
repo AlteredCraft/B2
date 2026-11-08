@@ -12,6 +12,7 @@ import {
   chatRows,
   citationRowKey,
   errorMessage,
+  focusCapInput,
   focusChipLabel,
   formatModelSize,
   modelDetail,
@@ -36,6 +37,7 @@ const setup = (over: Partial<ChatSetup> = {}): ChatSetup => ({
   available: [],
   ollama: null,
   tool_calls: { in_force: 64, default: 64, ceiling: 4096 },
+  focus_passages: { in_force: 8, default: 8, ceiling: 64 },
   ...over,
 });
 
@@ -234,6 +236,21 @@ test("the tool-call cap field is untouched, cleared, set, or refused — before 
     assert.match(verdict.error, /1 to 4096/);
   }
   assert.ok("error" in toolCapInput("200", { in_force: 64, default: 64, ceiling: 100 }));
+});
+
+test("the focus cap field follows the same three states, and its refusal names it", () => {
+  const cap = { in_force: 8, default: 8, ceiling: 64 };
+  assert.deepEqual(focusCapInput("8", cap), { send: null });
+  assert.deepEqual(focusCapInput("", cap), { send: "" });
+  assert.deepEqual(focusCapInput(" 3 ", cap), { send: "3" });
+  assert.deepEqual(focusCapInput("64", cap), { send: "64" });
+  for (const bad of ["0", "65", "-1", "2.5", "lots"]) {
+    const verdict = focusCapInput(bad, cap);
+    assert.ok("error" in verdict, `${bad} should be refused`);
+    assert.match(verdict.error, /^Focus passages must be a whole number from 1 to 64\.$/);
+  }
+  const toolVerdict = toolCapInput("0", { in_force: 64, default: 64, ceiling: 4096 });
+  assert.ok("error" in toolVerdict && toolVerdict.error.startsWith("Tool calls per reply"));
 });
 
 test("the pull command is spelled in one place", () => {

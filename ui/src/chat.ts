@@ -12,8 +12,8 @@ import type {
   ChatSetup,
   ChatTurn,
   Citation,
+  CapSetting,
   OllamaModel,
-  ToolCallCap,
   ToolUse,
 } from "./types";
 
@@ -72,23 +72,33 @@ export function toolsLine(tools: readonly ToolUse[] = []): string {
   return names.length === 0 ? "" : `Looked up with B2 tools: ${names.join(", ")}`;
 }
 
+/** What a cap field sends with a save, or why it can't. */
+export type CapVerdict = { send: string | null } | { error: string };
+
 /**
- * What the **Tool calls per reply** field sends with a save, per the host's three-state
- * rule (`apply_tool_cap`): `null` when untouched (storing the shown value would pin today's
- * default over a later env var), `""` when cleared, the number when set, or an `error`.
+ * What a cap field sends with a save, per the host's three-state rule (`apply_cap`):
+ * `null` when untouched (storing the shown value would pin today's default over a later
+ * env var), `""` when cleared, the number when set, or an `error` naming the field.
  */
-export function toolCapInput(
-  raw: string,
-  cap: ToolCallCap,
-): { send: string | null } | { error: string } {
+function capInput(raw: string, cap: CapSetting, label: string): CapVerdict {
   const typed = raw.trim();
   if (typed === "") return { send: "" };
   if (typed === String(cap.in_force)) return { send: null };
   // Digits only: `Number()` would wave through "1e3", " 12 " and "0x10".
   const n = /^\d+$/.test(typed) ? Number(typed) : Number.NaN;
   if (!Number.isSafeInteger(n) || n < 1 || n > cap.ceiling)
-    return { error: `Tool calls per reply must be a whole number from 1 to ${cap.ceiling}.` };
+    return { error: `${label} must be a whole number from 1 to ${cap.ceiling}.` };
   return { send: String(n) };
+}
+
+/** The **Tool calls per reply** field (`apply_tool_cap`). */
+export function toolCapInput(raw: string, cap: CapSetting): CapVerdict {
+  return capInput(raw, cap, "Tool calls per reply");
+}
+
+/** The **Focus passages** field (`apply_focus_cap`, GH #253). */
+export function focusCapInput(raw: string, cap: CapSetting): CapVerdict {
+  return capInput(raw, cap, "Focus passages");
 }
 
 /** The note a question is about, by path (its identity) and title. */

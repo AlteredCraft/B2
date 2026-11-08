@@ -3,7 +3,7 @@
 
 mod common;
 
-use b2_core::chat::{self, CONDENSE_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT};
+use b2_core::chat::{self, FocusRequest, CONDENSE_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT};
 use b2_core::llm::{
     ChatRequest, ChatTurn, Completion, ContextPassage, FakeLlm, LlmProvider, RequestKind, Role,
     NO_EVIDENCE_ANSWER,
@@ -551,6 +551,14 @@ impl LlmProvider for Recording {
     }
 }
 
+/// A focus on `note` at the default cap.
+fn focus(note: &str) -> Option<FocusRequest<'_>> {
+    Some(FocusRequest {
+        note,
+        max_passages: chat::FOCUS_PASSAGES,
+    })
+}
+
 /// What retrieval hands the model for `query`, as passages.
 fn retrieved(vault: &Vault, query: &str) -> Vec<ContextPassage> {
     vault
@@ -644,7 +652,7 @@ fn a_focus_note_leads_the_passages_and_both_prompts_name_its_path() {
             &rec,
             "clean up this doc",
             &history,
-            Some(SRS_PATH),
+            focus(SRS_PATH),
             &mut keep_streaming(),
         )
         .unwrap();
@@ -693,7 +701,7 @@ fn a_focus_passage_that_retrieval_also_finds_is_numbered_once() {
             &rec,
             "forgetting",
             &[],
-            Some(SRS_PATH),
+            focus(SRS_PATH),
             &mut keep_streaming(),
         )
         .unwrap();
@@ -708,10 +716,9 @@ fn a_focus_passage_that_retrieval_also_finds_is_numbered_once() {
     }
 }
 
-#[test]
-fn a_focus_note_longer_than_the_cap_says_how_much_of_it_was_included() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
+/// A vault whose `long.md` has more passages than the default focus cap, and how many.
+fn long_note_vault(dir: &std::path::Path) -> (Vault, usize) {
+    let root = dir.join("vault");
     fs::create_dir_all(&root).unwrap();
     let sections: String = (1..=chat::FOCUS_PASSAGES + 4)
         .map(|i| {
@@ -728,19 +735,36 @@ fn a_focus_note_longer_than_the_cap_says_how_much_of_it_was_included() {
         total > chat::FOCUS_PASSAGES,
         "the fixture must overflow the cap"
     );
+    (vault, total)
+}
 
+/// The one request an ask about `long.md` sends, at `max_passages`.
+fn long_note_request(vault: &Vault, max_passages: usize) -> ChatRequest {
     let rec = Recording::new();
+    let focus = FocusRequest {
+        note: "long.md",
+        max_passages,
+    };
     vault
         .ask(
             &rec,
             "summarise this",
             &[],
-            Some("long.md"),
+            Some(focus),
             &mut keep_streaming(),
         )
         .unwrap();
-    let requests = rec.take();
-    let req = &requests[0];
+    let mut requests = rec.take();
+    assert_eq!(requests.len(), 1);
+    requests.remove(0)
+}
+
+#[test]
+fn a_focus_note_longer_than_the_cap_says_how_much_of_it_was_included() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, total) = long_note_vault(tmp.path());
+
+    let req = long_note_request(&vault, chat::FOCUS_PASSAGES);
     assert!(req.passages[..chat::FOCUS_PASSAGES]
         .iter()
         .all(|p| p.path == "long.md"));
@@ -749,6 +773,35 @@ fn a_focus_note_longer_than_the_cap_says_how_much_of_it_was_included() {
         chat::FOCUS_PASSAGES
     );
     assert!(req.system.contains(&line), "{}", req.system);
+}
+
+#[test]
+fn the_callers_cap_decides_how_many_focus_passages_lead_and_the_trim_line_follows_it() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, total) = long_note_vault(tmp.path());
+
+    let wide = long_note_request(&vault, chat::FOCUS_PASSAGES);
+    let narrow = long_note_request(&vault, 3);
+    assert_eq!(
+        narrow.passages[..3],
+        wide.passages[..3],
+        "a smaller cap takes the same opening passages, in order"
+    );
+    assert!(
+        narrow.system.contains(&format!(
+            "Only the first 3 of its {total} passages are included."
+        )),
+        "{}",
+        narrow.system
+    );
+
+    let whole = long_note_request(&vault, total);
+    assert!(
+        !whole.system.contains("passages are included"),
+        "a cap the note fits under trims nothing: {}",
+        whole.system
+    );
+    assert!(whole.passages[..total].iter().all(|p| p.path == "long.md"));
 }
 
 #[test]
@@ -762,7 +815,7 @@ fn an_unknown_focus_note_is_note_not_found_and_asks_the_model_nothing() {
             &rec,
             "clean up this doc",
             &[ChatTurn::user("earlier")],
-            Some("no/such-note.md"),
+            focus("no/such-note.md"),
             &mut keep_streaming(),
         )
         .unwrap_err();

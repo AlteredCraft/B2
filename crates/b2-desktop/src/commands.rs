@@ -11,6 +11,7 @@ use crate::error::CmdError;
 use crate::watch::VaultWatcher;
 use crate::{open_read, open_semantic, open_vault, AppState};
 use b2_core::add::AddReport;
+use b2_core::chat::FocusRequest;
 use b2_core::ingest::ReindexProgress;
 use b2_core::llm::{ChatTurn, LlmProvider};
 use b2_core::vault::{
@@ -520,6 +521,7 @@ pub fn set_chat_config(
     model: Option<String>,
     api_key: Option<String>,
     max_tool_calls: Option<String>,
+    focus_passages: Option<String>,
 ) -> ChatSetup {
     {
         // One save at a time (Tauri doesn't serialize `(async)` commands). Not held over
@@ -531,6 +533,7 @@ pub fn set_chat_config(
             model,
             api_key,
             max_tool_calls,
+            focus_passages,
             &crate::keychain::Keychain,
         );
         // Persisted here so tests never write the real data dir. The Keychain is passed
@@ -548,18 +551,20 @@ fn set_chat_config_impl(
     model: Option<String>,
     api_key: Option<String>,
     max_tool_calls: Option<String>,
+    focus_passages: Option<String>,
     keys: &dyn crate::keychain::KeyStore,
 ) -> ChatPrefs {
     let clean = |v: Option<String>| {
         v.map(|s| s.trim().to_string())
             .filter(|s: &String| !s.is_empty())
     };
-    let (api_key, key_remembered) =
-        crate::chat::apply_key(&state.chat_prefs(), api_key.as_deref(), keys);
+    let prev = state.chat_prefs();
+    let (api_key, key_remembered) = crate::chat::apply_key(&prev, api_key.as_deref(), keys);
     let prefs = ChatPrefs {
         base_url: clean(base_url),
         model: clean(model),
-        max_tool_calls: crate::chat::apply_tool_cap(&state.chat_prefs(), max_tool_calls.as_deref()),
+        max_tool_calls: crate::chat::apply_tool_cap(&prev, max_tool_calls.as_deref()),
+        focus_passages: crate::chat::apply_focus_cap(&prev, focus_passages.as_deref()),
         api_key,
         key_remembered,
     };
@@ -577,7 +582,8 @@ fn chat_setup_impl(state: &AppState) -> ChatSetup {
     }
 }
 
-/// The testable core of `ask`. `sink` receives every token, in order, as it arrives.
+/// The testable core of `ask`. `sink` receives every token, in order, as it arrives. The
+/// focus cap is the one in force (Settings over the environment).
 fn ask_impl(
     state: &AppState,
     vault: &Vault,
@@ -587,6 +593,8 @@ fn ask_impl(
     focus: Option<&str>,
     sink: &dyn Fn(&str),
 ) -> Result<AnswerView, CmdError> {
+    let max_passages = state.chat_prefs().config().focus_passages;
+    let focus = focus.map(|note| FocusRequest { note, max_passages });
     stream_answer(state, sink, |on_token| {
         vault.ask(llm, question, history, focus, on_token)
     })
@@ -1579,7 +1587,15 @@ mod tests {
         let state = AppState::new(None);
         let keys = MemoryStore::empty();
         let save = |cap: Option<&str>| {
-            set_chat_config_impl(&state, None, None, None, cap.map(str::to_string), &keys);
+            set_chat_config_impl(
+                &state,
+                None,
+                None,
+                None,
+                cap.map(str::to_string),
+                None,
+                &keys,
+            );
             state.chat_prefs().config().max_tool_calls
         };
         let default = b2_llm::LlmConfig::from_env().max_tool_calls;
@@ -1597,6 +1613,36 @@ mod tests {
     }
 
     #[test]
+    fn the_focus_cap_is_set_kept_and_cleared_by_a_save() {
+        let state = AppState::new(None);
+        let keys = MemoryStore::empty();
+        let save = |cap: Option<&str>| {
+            set_chat_config_impl(
+                &state,
+                None,
+                None,
+                None,
+                None,
+                cap.map(str::to_string),
+                &keys,
+            );
+            state.chat_prefs().config().focus_passages
+        };
+        let default = b2_llm::LlmConfig::from_env().focus_passages;
+        assert_eq!(save(Some("3")), 3);
+        assert_eq!(save(None), 3, "a save that doesn't mention it keeps it");
+        assert_eq!(save(Some("65")), 3, "a refused value changes nothing");
+        assert_eq!(
+            save(Some("")),
+            default,
+            "blank returns to the shared resolution"
+        );
+        save(Some("12"));
+        let setup = b2_llm::ChatSetup::fake(&state.chat_prefs().config());
+        assert_eq!(setup.focus_passages.in_force, 12);
+    }
+
+    #[test]
     fn chat_config_layers_over_the_shared_resolution() {
         let state = AppState::new(None);
         let keys = MemoryStore::empty();
@@ -1605,6 +1651,7 @@ mod tests {
             Some("http://localhost:1234/v1".into()),
             Some("qwen2.5".into()),
             Some("sk-a-cloud-key".into()),
+            None,
             None,
             &keys,
         );
@@ -1618,6 +1665,7 @@ mod tests {
             &state,
             Some("http://localhost:1234/v1".into()),
             Some("  ".into()),
+            None,
             None,
             None,
             &keys,
@@ -1638,6 +1686,7 @@ mod tests {
             None,
             Some("sk-remember-me".into()),
             None,
+            None,
             &keys,
         );
         assert_eq!(keys.peek().as_deref(), Some("sk-remember-me"));
@@ -1657,6 +1706,7 @@ mod tests {
             None,
             Some("sk-a-cloud-key".into()),
             None,
+            None,
             &keys,
         );
         assert_eq!(
@@ -1665,7 +1715,7 @@ mod tests {
         );
 
         // Absent: untouched.
-        set_chat_config_impl(&state, None, None, None, None, &keys);
+        set_chat_config_impl(&state, None, None, None, None, None, &keys);
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
             Some("sk-a-cloud-key")
@@ -1673,7 +1723,7 @@ mod tests {
         assert_eq!(keys.peek().as_deref(), Some("sk-a-cloud-key"));
 
         // Blank (the Remove button): gone from both. `B2_LLM_API_KEY` is beyond its reach.
-        set_chat_config_impl(&state, None, None, Some("   ".into()), None, &keys);
+        set_chat_config_impl(&state, None, None, Some("   ".into()), None, None, &keys);
         assert_eq!(state.chat_prefs().api_key, None);
         assert_eq!(
             keys.peek(),
@@ -1692,6 +1742,7 @@ mod tests {
             Some("http://b2-no-such-host.invalid:11434/v1".into()),
             Some("llama3.2".into()),
             Some("sk-live-must-not-cross".into()),
+            None,
             None,
             &MemoryStore::empty(),
         );
@@ -1712,6 +1763,7 @@ mod tests {
             Some("https://api.example.com/v1".into()),
             None,
             Some("sk-typed-just-now".into()),
+            None,
             None,
             &keys,
         );
