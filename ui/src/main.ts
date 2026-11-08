@@ -55,10 +55,13 @@ import {
 import { cardRowKey, sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import {
   answerMessage,
+  chatFocus,
   chatHistory,
   chatReady,
   errorMessage,
   LOCAL_CHAT_ENDPOINT,
+  type CapVerdict,
+  focusCapInput,
   toolCapInput,
   userMessage,
   whyQuestion,
@@ -1907,8 +1910,9 @@ async function sendChat(question: string): Promise<void> {
   if (!q || state.chatStreaming !== null) return;
   // History is taken before this question joins the transcript.
   const history = chatHistory(state.chatMessages);
+  const focus = chatFocus(state)?.path ?? null;
   await runChatTurn(q, true, "Searching your notes…", (onToken) =>
-    api.ask(q, history, onToken),
+    api.ask(q, history, focus, onToken),
   );
 }
 
@@ -2090,22 +2094,34 @@ async function saveChatConfig(): Promise<void> {
   // Empty is `null` (keep): the field paints empty even when a key is set. Removal is
   // `clearChatKey`.
   const key = value("settings-chat-key");
-  // Validate the tool-call cap before sending anything.
-  const capField = document.getElementById("settings-chat-tool-cap") as HTMLInputElement | null;
-  const cap =
-    capField && state.chatSetup
-      ? toolCapInput(capField.value, state.chatSetup.tool_calls)
-      : { send: null };
-  if ("error" in cap) {
-    flash(cap.error);
-    capField?.focus();
-    return;
-  }
-  await applyChatConfig(url, model, key, cap.send, (setup) =>
+  // Validate the caps before sending anything.
+  const setup = state.chatSetup;
+  const toolCap = capField("settings-chat-tool-cap", (raw) =>
+    setup ? toolCapInput(raw, setup.tool_calls) : { send: null },
+  );
+  if (toolCap === undefined) return;
+  const focusCap = capField("settings-chat-focus-cap", (raw) =>
+    setup ? focusCapInput(raw, setup.focus_passages) : { send: null },
+  );
+  if (focusCap === undefined) return;
+  await applyChatConfig(url, model, key, toolCap, focusCap, (setup) =>
     setup.state === "ready"
       ? `Chat model saved — connected to ${setup.model}.`
       : (setup.message ?? "Chat settings saved."),
   );
+}
+
+/** A cap field's value to send, or `undefined` after flashing its refusal and focusing it. */
+function capField(id: string, judge: (raw: string) => CapVerdict): string | null | undefined {
+  const field = document.getElementById(id) as HTMLInputElement | null;
+  if (!field) return null;
+  const verdict = judge(field.value);
+  if ("error" in verdict) {
+    flash(verdict.error);
+    field.focus();
+    return undefined;
+  }
+  return verdict.send;
 }
 
 /** The setup card's installed-model list: pick one to configure it. */
@@ -2115,6 +2131,7 @@ async function useChatModel(model: string): Promise<void> {
   await applyChatConfig(
     state.chatSetup?.base_url ?? null,
     model,
+    null,
     null,
     null,
     () => `Chat model set to ${model}.`,
@@ -2131,6 +2148,7 @@ async function clearChatKey(): Promise<void> {
     state.chatSetup?.model ?? null,
     "",
     null,
+    null,
     // The returned source is the outcome: still stored/session means the Keychain
     // refused, and the key would return at next launch.
     (setup) =>
@@ -2146,10 +2164,11 @@ async function applyChatConfig(
   model: string | null,
   apiKey: string | null,
   maxToolCalls: string | null,
+  focusPassages: string | null,
   said: (setup: ChatSetup) => string,
 ): Promise<void> {
   try {
-    const setup = await api.setChatConfig(baseUrl, model, apiKey, maxToolCalls);
+    const setup = await api.setChatConfig(baseUrl, model, apiKey, maxToolCalls, focusPassages);
     adoptChatSetup(setup);
     flash(said(setup));
   } catch (e) {

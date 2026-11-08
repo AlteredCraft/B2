@@ -124,6 +124,7 @@ function chatSetup(over: Partial<ChatSetup> = {}): ChatSetup {
     available: [],
     ollama: null,
     tool_calls: { in_force: 64, default: 64, ceiling: 4096 },
+    focus_passages: { in_force: 8, default: 8, ceiling: 64 },
     ...over,
   };
 }
@@ -895,6 +896,20 @@ check("Settings → Chat offers the tool-call cap, painted from the host's own n
   assert(field.includes('type="text"') && field.includes('inputmode="numeric"'), field);
   assert(html.includes("Default 64") && html.includes("4096"), "the copy quotes the host's range");
   assert(html.includes("B2_LLM_MAX_TOOL_CALLS"), "and names the variable Settings overrides");
+});
+
+check("Settings → Chat offers the focus cap beside it, painted from the host's own numbers", () => {
+  const html = chatTab({ focus_passages: { in_force: 12, default: 8, ceiling: 64 } });
+  const field = tagWith(html, 'id="settings-chat-focus-cap"');
+  assert(field.startsWith("<input"), `a field: ${field}`);
+  assert(field.includes('value="12"'), `it shows the cap in force: ${field}`);
+  assert(field.includes('type="text"') && field.includes('inputmode="numeric"'), field);
+  assert(html.includes("Default 8") && html.includes("up to 64"), "the copy quotes the host's range");
+  assert(html.includes("B2_LLM_FOCUS_PASSAGES"), "and names the variable Settings overrides");
+  assert(
+    html.indexOf('id="settings-chat-tool-cap"') < html.indexOf('id="settings-chat-focus-cap"'),
+    "next to Tool calls per reply, in the form's tab order",
+  );
 });
 
 check("an answer built with tools says so, escaped like everything a model names", () => {

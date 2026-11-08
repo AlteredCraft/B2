@@ -18,26 +18,46 @@ impl Vault {
     /// A failed condense falls back to the raw question. `on_token` returning `Break`
     /// cancels. A hallucinated `[n]` resolves to nothing; the text is never rewritten.
     /// A failed answer call is [`Error::Llm`](crate::Error::Llm).
+    ///
+    /// `focus` is the note the user is viewing (GH #253): its first `max_passages`
+    /// passages are numbered first and the prompt names it, so "this doc" has a referent.
+    /// An unknown ref is [`Error::NoteNotFound`], before any model call. `None` sends
+    /// exactly the unfocused request.
     pub fn ask(
         &self,
         llm: &dyn LlmProvider,
         question: &str,
         history: &[ChatTurn],
+        focus: Option<chat::FocusRequest<'_>>,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> Result<AnswerView> {
         let _op = tracing::debug_span!(
             target: "b2::vault",
             "ask",
             question,
-            multi_turn = !history.is_empty()
+            multi_turn = !history.is_empty(),
+            focus = focus.map(|f| f.note),
+            focus_cap = focus.map(|f| f.max_passages)
         )
         .entered();
+        let (focus, lead) = match focus {
+            Some(request) => {
+                let (f, lead) = self.focus_passages(request)?;
+                (Some(f), lead)
+            }
+            None => (None, Vec::new()),
+        };
         let query = if history.is_empty() {
             question.to_string()
         } else {
-            chat::condense_query(llm, question, history)
+            chat::condense_query(
+                llm,
+                question,
+                history,
+                focus.as_ref().map(|f| f.path.as_str()),
+            )
         };
-        let passages: Vec<ContextPassage> = self
+        let retrieved: Vec<ContextPassage> = self
             .search_chunks(&query, chat::ASK_PASSAGES)?
             .into_iter()
             .map(|c| ContextPassage {
@@ -45,14 +65,47 @@ impl Vault {
                 heading_path: c.heading_path,
                 text: c.text,
             })
+            // Only a repeat of the lead is dropped, so no focus means no change.
+            .filter(|p| !lead.contains(p))
             .collect();
+        let passages = [lead, retrieved].concat();
         tracing::debug!(
             target: "b2::chat",
             passages = passages.len(),
+            focus_passages = focus.as_ref().map(|f| f.included),
             "retrieved grounding passages"
         );
-        let req = chat::build_request(question, history, passages);
+        let req = chat::build_request(question, history, passages, focus.as_ref());
         self.stream_answer(llm, &req, on_token)
+    }
+
+    /// The focus note's first `max_passages` passages in order, as `b2_read` reads them,
+    /// and how many it has in all.
+    fn focus_passages(
+        &self,
+        request: chat::FocusRequest<'_>,
+    ) -> Result<(chat::Focus, Vec<ContextPassage>)> {
+        let path = self.resolve_ref(request.note)?;
+        let ids = db::note_chunk_ids(&self.conn, &path)?;
+        // A missing row is a torn read (C1); the passage is skipped, not an error.
+        let passages = ids
+            .iter()
+            .take(request.max_passages)
+            .filter_map(|id| db::chunk_detail(&self.conn, *id).transpose())
+            .map(|detail| {
+                detail.map(|(heading_path, text)| ContextPassage {
+                    path: path.clone(),
+                    heading_path,
+                    text,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let focus = chat::Focus {
+            included: passages.len(),
+            total: ids.len(),
+            path,
+        };
+        Ok((focus, passages))
     }
 
     /// Why? on a Similar & unlinked row: a grounded, cited explanation of why

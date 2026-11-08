@@ -151,7 +151,7 @@ fn ask_one(vault: &Vault, llm: &dyn LlmProvider, q: &Question) -> Result<Scored,
     let started = Instant::now();
     let mut tokens = 0usize;
     let mut first_token: Option<u128> = None;
-    let answer = vault.ask(llm, &q.question, &[], &mut |_| {
+    let answer = vault.ask(llm, &q.question, &[], None, &mut |_| {
         tokens += 1;
         first_token.get_or_insert_with(|| started.elapsed().as_millis());
         ControlFlow::Continue(())

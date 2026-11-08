@@ -88,6 +88,7 @@ fn complete(p: &OpenAiCompatProvider, tokens: &mut Vec<String>) -> b2_core::Resu
             heading_path: None,
             text: "The brain encodes, stores, and retrieves information.".into(),
         }],
+        None,
     );
     let completion = p.complete(&req, &mut |t| {
         tokens.push(t.to_string());
@@ -288,7 +289,7 @@ fn a_reply_past_the_configured_tool_call_cap_fails_with_a_typed_error() {
             ..LlmConfig::default()
         })
     };
-    let req = build_request("q", &[], Vec::new());
+    let req = build_request("q", &[], Vec::new(), None);
     let run = |p: &OpenAiCompatProvider| p.complete(&req, &mut |_| ControlFlow::Continue(()));
 
     let err = run(&capped(2)).unwrap_err();

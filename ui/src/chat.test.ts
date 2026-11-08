@@ -5,12 +5,15 @@ import {
   STREAMING_ROW_KEY,
   answerMessage,
   chatEmptyState,
+  chatFocus,
   chatReady,
   chatStateOf,
   chatHistory,
   chatRows,
   citationRowKey,
   errorMessage,
+  focusCapInput,
+  focusChipLabel,
   formatModelSize,
   modelDetail,
   pullCommand,
@@ -34,6 +37,7 @@ const setup = (over: Partial<ChatSetup> = {}): ChatSetup => ({
   available: [],
   ollama: null,
   tool_calls: { in_force: 64, default: 64, ceiling: 4096 },
+  focus_passages: { in_force: 8, default: 8, ceiling: 64 },
   ...over,
 });
 
@@ -234,6 +238,21 @@ test("the tool-call cap field is untouched, cleared, set, or refused — before 
   assert.ok("error" in toolCapInput("200", { in_force: 64, default: 64, ceiling: 100 }));
 });
 
+test("the focus cap field follows the same three states, and its refusal names it", () => {
+  const cap = { in_force: 8, default: 8, ceiling: 64 };
+  assert.deepEqual(focusCapInput("8", cap), { send: null });
+  assert.deepEqual(focusCapInput("", cap), { send: "" });
+  assert.deepEqual(focusCapInput(" 3 ", cap), { send: "3" });
+  assert.deepEqual(focusCapInput("64", cap), { send: "64" });
+  for (const bad of ["0", "65", "-1", "2.5", "lots"]) {
+    const verdict = focusCapInput(bad, cap);
+    assert.ok("error" in verdict, `${bad} should be refused`);
+    assert.match(verdict.error, /^Focus passages must be a whole number from 1 to 64\.$/);
+  }
+  const toolVerdict = toolCapInput("0", { in_force: 64, default: 64, ceiling: 4096 });
+  assert.ok("error" in toolVerdict && toolVerdict.error.startsWith("Tool calls per reply"));
+});
+
 test("the pull command is spelled in one place", () => {
   assert.equal(pullCommand("llama3.1:8b"), "ollama pull llama3.1:8b");
 });
@@ -250,4 +269,17 @@ test("an installed model's detail is its parameters and size, whichever it has",
   assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: null }), "1.9 GB");
   assert.equal(modelDetail({ name: "m", size: 0, parameters: "3.2B" }), "3.2B");
   assert.equal(modelDetail({ name: "m", size: 0, parameters: null }), "");
+});
+
+test("the open note is chat's focus; a resource or an empty pane is none", () => {
+  const note = { path: "Toy/ForgeOS.md", title: "ForgeOS" };
+  assert.deepEqual(chatFocus({ current: note, currentResource: null }), note);
+  assert.equal(chatFocus({ current: null, currentResource: { path: "img/a.png" } }), null);
+  assert.equal(chatFocus({ current: null, currentResource: null }), null);
+});
+
+test("the focus chip names the note by title, else by path", () => {
+  assert.equal(focusChipLabel({ path: "Toy/ForgeOS.md", title: "ForgeOS" }), "about: ForgeOS");
+  assert.equal(focusChipLabel({ path: "Toy/ForgeOS.md", title: null }), "about: Toy/ForgeOS.md");
+  assert.equal(focusChipLabel({ path: "Toy/ForgeOS.md", title: "" }), "about: Toy/ForgeOS.md");
 });

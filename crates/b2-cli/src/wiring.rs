@@ -9,11 +9,14 @@ use b2_core::vault::Vault;
 use b2_llm::LlmConfig;
 use std::path::Path;
 
-/// The chat provider: the fake under `B2_LLM=fake`, else the real client from the
-/// environment plus flags, probed first so a stopped daemon fails before the question.
-pub fn open_llm(args: &LlmArgs) -> Result<Box<dyn LlmProvider>, CliError> {
-    let config =
-        LlmConfig::from_env().with_overrides(args.llm_url.as_deref(), args.llm_model.as_deref());
+/// The chat configuration: the environment plus flags.
+pub fn llm_config(args: &LlmArgs) -> LlmConfig {
+    LlmConfig::from_env().with_overrides(args.llm_url.as_deref(), args.llm_model.as_deref())
+}
+
+/// The chat provider: the fake under `B2_LLM=fake`, else the real client for `config`,
+/// probed first so a stopped daemon fails before the question.
+pub fn open_llm(config: LlmConfig) -> Result<Box<dyn LlmProvider>, CliError> {
     Ok(b2_llm::probed_provider(config)?)
 }
 

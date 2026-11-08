@@ -3268,6 +3268,19 @@ button.move-dest:hover {
   font-size: 11.5px;
   line-height: 1.35;
 }
+.chat-focus {
+  min-width: 0;
+  max-width: 60%;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* The setup card — the pane's empty state, and the same block inside Settings → Chat. */
 .chat-setup {

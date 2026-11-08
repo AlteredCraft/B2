@@ -1473,6 +1473,35 @@ fn ask_json_streams_tokens_then_the_resolved_answer() {
     }
 }
 
+/// `ask --note` leads with the named note: the fake cites every passage in order, so the
+/// first citation is passage 1. The question alone ranks spaced-repetition.md first.
+#[test]
+fn ask_note_json_cites_the_focus_note_first() {
+    let (_g, root) = reindexed();
+    let focus = "concepts/memory.md";
+
+    let out = run_chat(
+        &root,
+        &["--json", "ask", "--note", focus, "what is memory?"],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let events = events(&out);
+    let last = events.last().expect("the answer event");
+    assert_eq!(last["event"], "answer");
+    let first = &last["citations"][0];
+    assert_eq!(first["marker"], 1);
+    assert_eq!(first["path"], focus, "{last}");
+
+    let out = run_chat(
+        &root,
+        &["ask", "--note", "nope.md", "what is memory?"],
+        None,
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("nope.md"), "{}", stderr(&out));
+}
+
 /// `why` streams like `ask`, with citations confined to the two notes.
 #[test]
 fn why_json_streams_an_explanation_cited_to_the_two_notes() {

@@ -3,15 +3,15 @@
 
 mod common;
 
-use b2_core::chat::{self, CONDENSE_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT};
+use b2_core::chat::{self, FocusRequest, CONDENSE_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT};
 use b2_core::llm::{
     ChatRequest, ChatTurn, Completion, ContextPassage, FakeLlm, LlmProvider, RequestKind, Role,
     NO_EVIDENCE_ANSWER,
 };
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{keep_streaming, opened_vault, reindexed_vault, stream_into};
-use std::cell::Cell;
+use common::{keep_streaming, opened_vault, reindexed_vault, stream_into, SRS_PATH};
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
@@ -75,6 +75,7 @@ fn ask_grounds_the_answer_and_resolves_citations_end_to_end() {
             &FakeLlm,
             "forgetting curve",
             &[],
+            None,
             &mut stream_into(&mut streamed),
         )
         .unwrap();
@@ -111,7 +112,7 @@ fn breaking_mid_stream_reports_a_truncated_answer_honestly() {
     // Break on the third token: "Grounded", " in", " [1]" ← here.
     let mut seen = 0usize;
     let view = vault
-        .ask(&FakeLlm, "forgetting curve", &[], &mut |_tok| {
+        .ask(&FakeLlm, "forgetting curve", &[], None, &mut |_tok| {
             seen += 1;
             if seen == 3 {
                 ControlFlow::Break(())
@@ -132,7 +133,7 @@ fn breaking_mid_stream_reports_a_truncated_answer_honestly() {
 
     let mut first = true;
     let early = vault
-        .ask(&FakeLlm, "forgetting curve", &[], &mut |_tok| {
+        .ask(&FakeLlm, "forgetting curve", &[], None, &mut |_tok| {
             if first {
                 first = false;
                 ControlFlow::Continue(())
@@ -158,6 +159,7 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
             &counting,
             "forgetting curve",
             &[],
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -174,6 +176,7 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
             &counting,
             "tell me more about that",
             &history,
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -224,6 +227,7 @@ fn condensation_failure_degrades_to_the_raw_question() {
             },
             "quokka",
             &history,
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -242,6 +246,7 @@ fn condensation_failure_degrades_to_the_raw_question() {
             },
             "quokka",
             &history,
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -260,7 +265,13 @@ fn ask_answers_bm25_only_on_a_projected_but_unembedded_vault() {
     // No embedding space: retrieval is keyword-only (M4).
     let mut streamed = String::new();
     let view = vault
-        .ask(&FakeLlm, "forgetting", &[], &mut stream_into(&mut streamed))
+        .ask(
+            &FakeLlm,
+            "forgetting",
+            &[],
+            None,
+            &mut stream_into(&mut streamed),
+        )
         .unwrap();
     assert!(!view.cancelled);
     assert!(!view.citations.is_empty(), "chat keeps working unembedded");
@@ -314,6 +325,7 @@ fn a_hallucinated_marker_resolves_to_nothing_and_stays_in_the_text() {
             &Hallucinating,
             "forgetting curve",
             &[],
+            None,
             &mut stream_into(&mut sink),
         )
         .unwrap();
@@ -342,6 +354,7 @@ fn empty_retrieval_answers_no_evidence_rather_than_echoing() {
             &FakeLlm,
             "anything at all",
             &[],
+            None,
             &mut stream_into(&mut streamed),
         )
         .unwrap();
@@ -385,6 +398,7 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
             },
             "forgetting curve",
             &[],
+            None,
             &mut keep_streaming(),
         )
         .unwrap_err();
@@ -397,6 +411,7 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
             },
             "forgetting curve",
             &[],
+            None,
             &mut keep_streaming(),
         )
         .unwrap_err();
@@ -420,7 +435,7 @@ fn ask_shares_searchs_model_mismatch_fail_fast() {
 
     let swapped = Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(128))).unwrap();
     let err = swapped
-        .ask(&FakeLlm, "forgetting", &[], &mut keep_streaming())
+        .ask(&FakeLlm, "forgetting", &[], None, &mut keep_streaming())
         .unwrap_err();
     assert!(matches!(err, Error::ModelMismatch { .. }));
 }
@@ -445,7 +460,7 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
         ChatTurn::user("first question"),
         ChatTurn::assistant("first answer"),
     ];
-    let req = chat::build_request("second question", &history, passages);
+    let req = chat::build_request("second question", &history, passages, None);
 
     assert_eq!(req.turns.len(), 3);
     assert_eq!(req.turns[0].content, "first question");
@@ -501,4 +516,352 @@ fn cited_markers_keeps_real_markers_and_drops_everything_else() {
     );
 
     assert_eq!(chat::cited_markers("[1]", 0), Vec::<usize>::new());
+}
+
+// --- the focus note (GH #253) -----------------------------------------------------
+
+/// Records every request it is handed, then answers as [`FakeLlm`].
+struct Recording {
+    requests: RefCell<Vec<ChatRequest>>,
+}
+
+impl Recording {
+    fn new() -> Self {
+        Self {
+            requests: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn take(&self) -> Vec<ChatRequest> {
+        self.requests.take()
+    }
+}
+
+impl LlmProvider for Recording {
+    fn model_id(&self) -> &str {
+        "recording"
+    }
+    fn complete(
+        &self,
+        req: &ChatRequest,
+        on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
+    ) -> b2_core::Result<Completion> {
+        self.requests.borrow_mut().push(req.clone());
+        FakeLlm.complete(req, on_token)
+    }
+}
+
+/// A focus on `note` at the default cap.
+fn focus(note: &str) -> Option<FocusRequest<'_>> {
+    Some(FocusRequest {
+        note,
+        max_passages: chat::FOCUS_PASSAGES,
+    })
+}
+
+/// What retrieval hands the model for `query`, as passages.
+fn retrieved(vault: &Vault, query: &str) -> Vec<ContextPassage> {
+    vault
+        .search_chunks(query, chat::ASK_PASSAGES)
+        .unwrap()
+        .into_iter()
+        .map(|c| ContextPassage {
+            path: c.path,
+            heading_path: c.heading_path,
+            text: c.text,
+        })
+        .collect()
+}
+
+/// How many passages the index holds for `path`.
+fn chunk_count(root: &std::path::Path, path: &str) -> usize {
+    let conn = common::index_conn(root);
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
+            [path],
+            |r| r.get(0),
+        )
+        .unwrap();
+    usize::try_from(n).unwrap()
+}
+
+/// The pre-focus requests, spelled out field by field rather than through `build_request`,
+/// so a change to assembly can't move the expectation along with it.
+#[test]
+fn without_a_focus_the_requests_are_the_plain_grounded_and_condense_requests() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = reindexed_vault(tmp.path());
+
+    let rec = Recording::new();
+    vault
+        .ask(&rec, "forgetting curve", &[], None, &mut keep_streaming())
+        .unwrap();
+    let expected = ChatRequest {
+        kind: RequestKind::Chat,
+        system: GROUNDED_SYSTEM_PROMPT.to_string(),
+        turns: vec![ChatTurn::user("forgetting curve")],
+        passages: retrieved(&vault, "forgetting curve"),
+        tools: Vec::new(),
+        exchanges: Vec::new(),
+    };
+    assert_eq!(rec.take(), vec![expected]);
+
+    let history = [
+        ChatTurn::user("what is the forgetting curve?"),
+        ChatTurn::assistant("It describes memory decay over time [1]."),
+    ];
+    let rec = Recording::new();
+    vault
+        .ask(&rec, "tell me more", &history, None, &mut keep_streaming())
+        .unwrap();
+    let mut turns = history.to_vec();
+    turns.push(ChatTurn::user("tell me more"));
+    let condense = ChatRequest {
+        kind: RequestKind::Condense,
+        system: CONDENSE_SYSTEM_PROMPT.to_string(),
+        turns: turns.clone(),
+        passages: Vec::new(),
+        tools: Vec::new(),
+        exchanges: Vec::new(),
+    };
+    // FakeLlm's condense echoes the question, so retrieval ran on it.
+    let answer = ChatRequest {
+        kind: RequestKind::Chat,
+        system: GROUNDED_SYSTEM_PROMPT.to_string(),
+        turns,
+        passages: retrieved(&vault, "tell me more"),
+        tools: Vec::new(),
+        exchanges: Vec::new(),
+    };
+    assert_eq!(rec.take(), vec![condense, answer]);
+}
+
+#[test]
+fn a_focus_note_leads_the_passages_and_both_prompts_name_its_path() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed_vault(tmp.path());
+    let focus_chunks = chunk_count(&root, SRS_PATH);
+    assert!(focus_chunks > 0 && focus_chunks <= chat::FOCUS_PASSAGES);
+
+    // A question that names nothing: only the focus gives it a subject.
+    let history = [ChatTurn::user("earlier"), ChatTurn::assistant("answer")];
+    let rec = Recording::new();
+    let view = vault
+        .ask(
+            &rec,
+            "clean up this doc",
+            &history,
+            focus(SRS_PATH),
+            &mut keep_streaming(),
+        )
+        .unwrap();
+    let requests = rec.take();
+    let [condense, answer] = requests.as_slice() else {
+        panic!("expected a condense and an answer request: {requests:?}");
+    };
+
+    let sentence =
+        format!("The user is viewing {SRS_PATH}; \"this note\" or \"this doc\" means it.");
+    assert!(condense.system.starts_with(CONDENSE_SYSTEM_PROMPT));
+    assert!(condense.system.contains(&sentence), "{}", condense.system);
+    assert!(answer.system.starts_with(GROUNDED_SYSTEM_PROMPT));
+    assert!(answer.system.contains(&sentence), "{}", answer.system);
+    assert!(
+        !answer.system.contains("passages are included"),
+        "a note under the cap is not called trimmed: {}",
+        answer.system
+    );
+
+    // Every passage of the note, in order, then retrieval's minus anything repeated.
+    let (lead, rest) = answer.passages.split_at(focus_chunks);
+    assert!(lead.iter().all(|p| p.path == SRS_PATH), "{lead:?}");
+    let fill: Vec<ContextPassage> = retrieved(&vault, "clean up this doc")
+        .into_iter()
+        .filter(|p| !lead.contains(p))
+        .collect();
+    assert_eq!(rest, fill.as_slice());
+
+    assert_eq!(view.citations[0].marker, 1);
+    assert_eq!(view.citations[0].path, SRS_PATH);
+}
+
+#[test]
+fn a_focus_passage_that_retrieval_also_finds_is_numbered_once() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = reindexed_vault(tmp.path());
+    // 'forgetting' lives only in spaced-repetition.md, so retrieval returns its passages too.
+    assert!(retrieved(&vault, "forgetting")
+        .iter()
+        .any(|p| p.path == SRS_PATH));
+
+    let rec = Recording::new();
+    vault
+        .ask(
+            &rec,
+            "forgetting",
+            &[],
+            focus(SRS_PATH),
+            &mut keep_streaming(),
+        )
+        .unwrap();
+    let requests = rec.take();
+    let passages = &requests[0].passages;
+    for (i, p) in passages.iter().enumerate() {
+        assert!(
+            !passages[i + 1..].contains(p),
+            "passage {} is repeated: {p:?}",
+            i + 1
+        );
+    }
+}
+
+/// A vault whose `long.md` has more passages than the default focus cap, and how many.
+fn long_note_vault(dir: &std::path::Path) -> (Vault, usize) {
+    let root = dir.join("vault");
+    fs::create_dir_all(&root).unwrap();
+    let sections: String = (1..=chat::FOCUS_PASSAGES + 4)
+        .map(|i| {
+            let filler = format!("section{i} words for the long note, padded out. ").repeat(30);
+            format!("## Part {i}\n\n{filler}\n\n")
+        })
+        .collect();
+    common::write_note(&root, "long.md", &sections);
+    common::write_note(&root, "other.md", "An unrelated note about tides.");
+    let vault = Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+    let total = chunk_count(&root, "long.md");
+    assert!(
+        total > chat::FOCUS_PASSAGES,
+        "the fixture must overflow the cap"
+    );
+    (vault, total)
+}
+
+/// The one request an ask about `long.md` sends, at `max_passages`.
+fn long_note_request(vault: &Vault, max_passages: usize) -> ChatRequest {
+    let rec = Recording::new();
+    let focus = FocusRequest {
+        note: "long.md",
+        max_passages,
+    };
+    vault
+        .ask(
+            &rec,
+            "summarise this",
+            &[],
+            Some(focus),
+            &mut keep_streaming(),
+        )
+        .unwrap();
+    let mut requests = rec.take();
+    assert_eq!(requests.len(), 1);
+    requests.remove(0)
+}
+
+#[test]
+fn a_focus_note_longer_than_the_cap_says_how_much_of_it_was_included() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, total) = long_note_vault(tmp.path());
+
+    let req = long_note_request(&vault, chat::FOCUS_PASSAGES);
+    assert!(req.passages[..chat::FOCUS_PASSAGES]
+        .iter()
+        .all(|p| p.path == "long.md"));
+    let line = format!(
+        "Only the first {} of its {total} passages are included.",
+        chat::FOCUS_PASSAGES
+    );
+    assert!(req.system.contains(&line), "{}", req.system);
+}
+
+#[test]
+fn the_callers_cap_decides_how_many_focus_passages_lead_and_the_trim_line_follows_it() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, total) = long_note_vault(tmp.path());
+
+    let wide = long_note_request(&vault, chat::FOCUS_PASSAGES);
+    let narrow = long_note_request(&vault, 3);
+    assert_eq!(
+        narrow.passages[..3],
+        wide.passages[..3],
+        "a smaller cap takes the same opening passages, in order"
+    );
+    assert!(
+        narrow.system.contains(&format!(
+            "Only the first 3 of its {total} passages are included."
+        )),
+        "{}",
+        narrow.system
+    );
+
+    let whole = long_note_request(&vault, total);
+    assert!(
+        !whole.system.contains("passages are included"),
+        "a cap the note fits under trims nothing: {}",
+        whole.system
+    );
+    assert!(whole.passages[..total].iter().all(|p| p.path == "long.md"));
+}
+
+#[test]
+fn an_unknown_focus_note_is_note_not_found_and_asks_the_model_nothing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = reindexed_vault(tmp.path());
+
+    let rec = Recording::new();
+    let err = vault
+        .ask(
+            &rec,
+            "clean up this doc",
+            &[ChatTurn::user("earlier")],
+            focus("no/such-note.md"),
+            &mut keep_streaming(),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::NoteNotFound(r) if r == "no/such-note.md"),
+        "{err:?}"
+    );
+    assert!(rec.take().is_empty(), "nothing is asked of the model");
+}
+
+/// "Clean up this note" is work on the text, not a question the text answers: with every
+/// passage present, gemma4 still gave the no-evidence reply without this sentence (GH #253,
+/// PR #254's 821fd33).
+#[test]
+fn a_focused_prompt_treats_work_on_the_note_as_a_task_only_when_it_has_text() {
+    let task = "is a task to do with its text";
+    let passage = ContextPassage {
+        path: "notes/a.md".into(),
+        heading_path: None,
+        text: "the passage".into(),
+    };
+    let with_text = chat::Focus {
+        path: "notes/a.md".into(),
+        included: 1,
+        total: 1,
+    };
+    let req = chat::build_request("clean up this note", &[], vec![passage], Some(&with_text));
+    assert!(req.system.contains(task), "{}", req.system);
+    assert!(
+        req.system.contains("Reserve the no-evidence reply"),
+        "{}",
+        req.system
+    );
+
+    // An unindexed or empty note has no text to work on.
+    let no_text = chat::Focus {
+        path: "notes/a.md".into(),
+        included: 0,
+        total: 0,
+    };
+    let req = chat::build_request("clean up this note", &[], Vec::new(), Some(&no_text));
+    assert!(!req.system.contains(task), "{}", req.system);
+
+    // The condense prompt rewrites a query; it does no work on the note.
+    let rec = Recording::new();
+    chat::condense_query(&rec, "tidy it", &[ChatTurn::user("x")], Some("notes/a.md"));
+    let condense = rec.take();
+    assert!(!condense[0].system.contains(task), "{}", condense[0].system);
 }
