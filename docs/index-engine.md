@@ -538,7 +538,9 @@ swapping chat models never touches the index, so a provider swap is a URL or con
    `max_passages` passages (`db::note_chunk_ids` + `chunk_detail`; the adapter passes
    `LlmConfig::focus_passages`, default `FOCUS_PASSAGES = 8`) are numbered first and
    retrieval's passages follow, minus repeats; the prompt, and the condense prompt, name the
-   note, and a note cut short by the cap says so in one line. No focus, no change.
+   note, and a note cut short by the cap says so in one line. The grounded prompt also says
+   that work on the note (summarise, clean up, rewrite) is a task to do with its text, since a
+   small model otherwise refuses it as unsupported. No focus, no change.
 3. **Assemble.** The grounded system prompt plus numbered passages. Prompt assembly is core
    logic, not an adapter's.
 4. **Stream.** Tokens flow up through the caller's callback, whose return value cancels at

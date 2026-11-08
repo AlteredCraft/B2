@@ -62,9 +62,23 @@ fn focus_sentence(path: &str) -> String {
     format!("The user is viewing {path}; \"this note\" or \"this doc\" means it.")
 }
 
+/// What the grounded prompt adds when the focus note has text: a request about the open
+/// note is usually work on its text, not a question the text answers. Without it, gemma4
+/// read "clean up this note" as unsupported and refused, with every passage present (GH
+/// #253).
+const FOCUS_TASK_SENTENCE: &str = "A request to summarise, clean up, rewrite, outline, \
+shorten or otherwise work on this note is a task to do with its text: do it, using only \
+what the passages say, and cite the passages you drew on. Reserve the no-evidence reply for \
+a question these passages genuinely do not cover.";
+
 /// The focus lines of the grounded prompt; a trimmed note says so (limits are loud).
 fn focus_lines(focus: &Focus) -> String {
-    let sentence = focus_sentence(&focus.path);
+    let named = focus_sentence(&focus.path);
+    let sentence = if focus.included > 0 {
+        format!("{named} {FOCUS_TASK_SENTENCE}")
+    } else {
+        named
+    };
     if focus.included < focus.total {
         format!(
             "{sentence}\nOnly the first {} of its {} passages are included.",

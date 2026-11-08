@@ -825,3 +825,43 @@ fn an_unknown_focus_note_is_note_not_found_and_asks_the_model_nothing() {
     );
     assert!(rec.take().is_empty(), "nothing is asked of the model");
 }
+
+/// "Clean up this note" is work on the text, not a question the text answers: with every
+/// passage present, gemma4 still gave the no-evidence reply without this sentence (GH #253,
+/// PR #254's 821fd33).
+#[test]
+fn a_focused_prompt_treats_work_on_the_note_as_a_task_only_when_it_has_text() {
+    let task = "is a task to do with its text";
+    let passage = ContextPassage {
+        path: "notes/a.md".into(),
+        heading_path: None,
+        text: "the passage".into(),
+    };
+    let with_text = chat::Focus {
+        path: "notes/a.md".into(),
+        included: 1,
+        total: 1,
+    };
+    let req = chat::build_request("clean up this note", &[], vec![passage], Some(&with_text));
+    assert!(req.system.contains(task), "{}", req.system);
+    assert!(
+        req.system.contains("Reserve the no-evidence reply"),
+        "{}",
+        req.system
+    );
+
+    // An unindexed or empty note has no text to work on.
+    let no_text = chat::Focus {
+        path: "notes/a.md".into(),
+        included: 0,
+        total: 0,
+    };
+    let req = chat::build_request("clean up this note", &[], Vec::new(), Some(&no_text));
+    assert!(!req.system.contains(task), "{}", req.system);
+
+    // The condense prompt rewrites a query; it does no work on the note.
+    let rec = Recording::new();
+    chat::condense_query(&rec, "tidy it", &[ChatTurn::user("x")], Some("notes/a.md"));
+    let condense = rec.take();
+    assert!(!condense[0].system.contains(task), "{}", condense[0].system);
+}
