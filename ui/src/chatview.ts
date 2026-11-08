@@ -8,9 +8,11 @@ import {
   type ChatMessage,
   OLLAMA_QUICKSTART_URL,
   STREAMING_ROW_KEY,
+  chatFocus,
   chatReady,
   chatStateOf,
   citationRowKey,
+  focusChipLabel,
   modelDetail,
   pullCommand,
   retrievalNote,
@@ -160,6 +162,13 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
 function chatComposerHtml(state: AppState): string {
   const streaming = state.chatStreaming !== null;
   const note = retrievalNote(state);
+  // Display only (no control, so nothing new for K1): what `ask` sends as its focus.
+  const focus = chatFocus(state);
+  const chip = focus
+    ? `<span class="chat-focus" title="${escapeHtml(
+        `Questions are about ${focus.path}: “this note” means it`,
+      )}">${escapeHtml(focusChipLabel(focus))}</span>`
+    : "";
   return `<form class="chat-composer" id="chat-composer">
       <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask your notes…"
         aria-label="Ask your notes"></textarea>
@@ -171,6 +180,7 @@ function chatComposerHtml(state: AppState): string {
               )})">Stop</button>`
             : `<button type="submit" class="btn small primary" id="chat-send">Ask</button>`
         }
+        ${chip}
         ${note ? `<span class="chat-note muted">${escapeHtml(note)}</span>` : ""}
       </div>
     </form>`;

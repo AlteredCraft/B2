@@ -440,12 +440,14 @@ pub fn set_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), CmdErro
 
 /// Flow ④, one grounded answer behind `Vault::ask`: tokens stream over a [`Channel`] and
 /// the [`AnswerView`] is the return. `history` is the pane's; nothing about a chat is
-/// stored. Opens the real model, since retrieval embeds the question.
+/// stored. `focus` is the open note's path, so "this doc" means it (GH #253). Opens the
+/// real model, since retrieval embeds the question.
 #[tauri::command(async)]
 pub fn ask(
     state: State<'_, AppState>,
     question: String,
     history: Vec<ChatTurn>,
+    focus: Option<String>,
     on_event: Channel<String>,
 ) -> Result<AnswerView, CmdError> {
     let state = state.inner();
@@ -453,10 +455,18 @@ pub fn ask(
     // `FakeLlm` without a Tauri runtime.
     let llm = crate::chat::provider(&state.chat_prefs());
     let vault = open_semantic(state)?;
-    ask_impl(state, &vault, llm.as_ref(), &question, &history, &|token| {
-        // A send error means the window closed; the cancel flag is what stops the stream.
-        let _ = on_event.send(token.to_string());
-    })
+    ask_impl(
+        state,
+        &vault,
+        llm.as_ref(),
+        &question,
+        &history,
+        focus.as_deref(),
+        &|token| {
+            // A send error means the window closed; the cancel flag is what stops the stream.
+            let _ = on_event.send(token.to_string());
+        },
+    )
 }
 
 /// **Why?** for a Similar card: a grounded, cited explanation from `Vault::why_similar`,
@@ -574,10 +584,11 @@ fn ask_impl(
     llm: &dyn LlmProvider,
     question: &str,
     history: &[ChatTurn],
+    focus: Option<&str>,
     sink: &dyn Fn(&str),
 ) -> Result<AnswerView, CmdError> {
     stream_answer(state, sink, |on_token| {
-        vault.ask(llm, question, history, on_token)
+        vault.ask(llm, question, history, focus, on_token)
     })
 }
 
@@ -1446,7 +1457,7 @@ mod tests {
         let (state, vault) = ask_state(&tmp);
         let streamed = std::cell::RefCell::new(Vec::<String>::new());
 
-        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|t| {
+        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], None, &|t| {
             streamed.borrow_mut().push(t.to_string())
         })
         .unwrap();
@@ -1462,13 +1473,33 @@ mod tests {
     }
 
     #[test]
+    fn ask_hands_the_focus_note_to_the_engine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, vault) = ask_state(&tmp);
+        // "memory" alone ranks spaced-repetition.md first; the focus must lead instead.
+        let focus = "concepts/memory.md";
+
+        let answer = ask_impl(
+            &state,
+            &vault,
+            &FakeLlm,
+            "memory",
+            &[],
+            Some(focus),
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(answer.citations[0].path, focus, "{answer:?}");
+    }
+
+    #[test]
     fn esc_mid_answer_keeps_the_partial_text_and_says_it_was_stopped() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (state, vault) = ask_state(&tmp);
         let streamed = std::cell::RefCell::new(Vec::<String>::new());
 
         // Esc after the first token: the `cancel_ask` race, made deterministic.
-        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|t| {
+        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], None, &|t| {
             streamed.borrow_mut().push(t.to_string());
             state.ask.cancel();
         })
@@ -1491,7 +1522,7 @@ mod tests {
         let streaming = state.ask.try_claim();
         assert!(streaming.is_some());
 
-        let err = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap_err();
+        let err = ask_impl(&state, &vault, &FakeLlm, "memory", &[], None, &|_| {}).unwrap_err();
         assert!(matches!(err, CmdError::AskInFlight));
         assert_eq!(
             user_message(&err),
@@ -1539,7 +1570,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let (state, vault) = ask_state(&tmp);
         state.ask.cancel(); // from a turn that already ended
-        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap();
+        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], None, &|_| {}).unwrap();
         assert!(!answer.cancelled);
     }
 

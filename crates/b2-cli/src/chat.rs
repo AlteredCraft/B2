@@ -10,14 +10,19 @@ use b2_core::vault::{AnswerView, Vault};
 use std::io::{IsTerminal, Write};
 use std::ops::ControlFlow;
 
-pub fn cmd_ask(cli: &Cli, question: &str, llm_args: &LlmArgs) -> Result<(), CliError> {
+pub fn cmd_ask(
+    cli: &Cli,
+    question: &str,
+    focus: Option<&str>,
+    llm_args: &LlmArgs,
+) -> Result<(), CliError> {
     // The provider first: a stopped server should cost a round trip, not a model load.
     let llm = open_llm(llm_args)?;
     // Retrieval embeds the question, so the real model.
     let vault = open_vault(cli.vault_or_cwd(), true)?;
     // Ctrl-C cancels at the next token; what streamed stays, reported as partial.
     install_cancel_on_sigint(false);
-    ask_streamed(&vault, llm.as_ref(), question, &[], cli.json)?;
+    ask_streamed(&vault, llm.as_ref(), question, &[], focus, cli.json)?;
     if !cli.json {
         note_fake_llm();
     }
@@ -46,7 +51,7 @@ pub fn cmd_why(
     Ok(())
 }
 
-pub fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
+pub fn cmd_chat(cli: &Cli, focus: Option<&str>, llm_args: &LlmArgs) -> Result<(), CliError> {
     let llm = open_llm(llm_args)?;
     let vault = open_vault(cli.vault_or_cwd(), true)?;
     // Mid-answer Ctrl-C cancels the stream; at an idle prompt it leaves.
@@ -63,6 +68,9 @@ pub fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
              Nothing here is saved.",
             llm.model_id()
         );
+        if let Some(note) = focus {
+            eprintln!("About: {note}. \"This note\" in a question means it.");
+        }
     }
     if !cli.json {
         note_fake_llm();
@@ -86,8 +94,9 @@ pub fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
         if matches!(question, "/exit" | "/quit") {
             break;
         }
-        let turn =
-            while_answering(|| ask_streamed(&vault, llm.as_ref(), question, &history, cli.json));
+        let turn = while_answering(|| {
+            ask_streamed(&vault, llm.as_ref(), question, &history, focus, cli.json)
+        });
         match turn {
             Ok(answer) => {
                 // A cancelled answer is kept too: a follow-up refers to what was shown.
@@ -108,9 +117,10 @@ fn ask_streamed(
     llm: &dyn LlmProvider,
     question: &str,
     history: &[ChatTurn],
+    focus: Option<&str>,
     json: bool,
 ) -> Result<AnswerView, CliError> {
-    let answer = vault.ask(llm, question, history, &mut |token| {
+    let answer = vault.ask(llm, question, history, focus, &mut |token| {
         stream_token(token, json)
     })?;
     finish_answer(&answer, json);

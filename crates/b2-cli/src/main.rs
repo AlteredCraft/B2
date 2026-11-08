@@ -78,14 +78,18 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             edge_type,
             explanation,
         } => cmd_link(cli, src, dst, edge_type, explanation.as_deref()),
-        Command::Ask { question, llm } => cmd_ask(cli, question, llm),
+        Command::Ask {
+            question,
+            note,
+            llm,
+        } => cmd_ask(cli, question, note.as_deref(), llm),
         Command::Why {
             note,
             candidate,
             limit,
             llm,
         } => cmd_why(cli, note, candidate, *limit, llm),
-        Command::Chat { llm } => cmd_chat(cli, llm),
+        Command::Chat { note, llm } => cmd_chat(cli, note.as_deref(), llm),
     }
 }
 

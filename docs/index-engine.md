@@ -435,6 +435,7 @@ and their justification is re-derived on every `make eval` run (ADR-0013).
 | note hit pool | 3 × limit | note-view headroom (dedup + torn reads) | `vault.rs` |
 | chunk hit pool | limit + 2 | passage-view headroom (torn reads only) | `vault.rs` |
 | `ASK_PASSAGES` | 10 | chat's retrieve depth (flow ④ reads this flow) | `chat.rs` |
+| `FOCUS_PASSAGES` | 8 | the focus note's passages that lead an ask, before retrieval's | `chat.rs` |
 | `SHORTLIST_PER_RESULT` | 20 | discovery stage-1 width per asked result | `discover.rs` |
 | `SHORTLIST_MIN` | 200 | discovery stage-1 floor | `discover.rs` |
 | `EXCLUDE_HOPS` | 1 | discovery's already-connected radius | `discover.rs` |
@@ -533,7 +534,10 @@ swapping chat models never touches the index, so a provider swap is a URL or con
 1. **Condense** (multi-turn only). A provider call rewrites the follow-up into a standalone
    query. On failure it degrades to the raw question, so this step can never break chat.
 2. **Retrieve.** `search_chunks` at `ASK_PASSAGES = 10`: the §4 pipeline unchanged, BM25-only
-   fallback included.
+   fallback included. With a **focus** note (the one being viewed, GH #253), its first
+   `FOCUS_PASSAGES = 8` passages (`db::note_chunk_ids` + `chunk_detail`) are numbered first and
+   retrieval's passages follow, minus repeats; the prompt, and the condense prompt, name the
+   note, and a note cut short by the cap says so in one line. No focus, no change.
 3. **Assemble.** The grounded system prompt plus numbered passages. Prompt assembly is core
    logic, not an adapter's.
 4. **Stream.** Tokens flow up through the caller's callback, whose return value cancels at

@@ -91,6 +91,30 @@ export function toolCapInput(
   return { send: String(n) };
 }
 
+/** The note a question is about, by path (its identity) and title. */
+export interface ChatFocus {
+  path: string;
+  title: string | null;
+}
+
+/**
+ * The note chat is about (GH #253): the open note, sent as `ask`'s `focus` so "this doc"
+ * has a referent. A resource is never one: the engine has no passages of it to ground on.
+ */
+export function chatFocus(s: {
+  current: ChatFocus | null;
+  currentResource: unknown;
+}): ChatFocus | null {
+  if (s.currentResource !== null || s.current === null) return null;
+  return { path: s.current.path, title: s.current.title };
+}
+
+/** The composer chip's text, so what the model is told is visible. Not escaped here: a
+ *  title is note content, and the paint escapes it (E5). */
+export function focusChipLabel(f: ChatFocus): string {
+  return `about: ${f.title || f.path}`;
+}
+
 /** A turn that failed. */
 export function errorMessage(error: string): ChatMessage {
   return { role: "assistant", text: "", citations: [], cancelled: false, tools: [], error };

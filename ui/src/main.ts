@@ -55,6 +55,7 @@ import {
 import { cardRowKey, sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import {
   answerMessage,
+  chatFocus,
   chatHistory,
   chatReady,
   errorMessage,
@@ -1907,8 +1908,9 @@ async function sendChat(question: string): Promise<void> {
   if (!q || state.chatStreaming !== null) return;
   // History is taken before this question joins the transcript.
   const history = chatHistory(state.chatMessages);
+  const focus = chatFocus(state)?.path ?? null;
   await runChatTurn(q, true, "Searching your notes…", (onToken) =>
-    api.ask(q, history, onToken),
+    api.ask(q, history, focus, onToken),
   );
 }
 

@@ -17,6 +17,10 @@ use std::ops::ControlFlow;
 /// so chat adds no new candidate width (GH #141/#142).
 pub const ASK_PASSAGES: usize = 10;
 
+/// How many of the focus note's own passages lead an ask, in order (GH #253). Retrieval at
+/// [`ASK_PASSAGES`] follows them, so a long note can't crowd out the rest of the vault.
+pub const FOCUS_PASSAGES: usize = 8;
+
 /// The grounded system prompt (flow ④ step 2). Its no-evidence sentence must stay
 /// [`crate::llm::NO_EVIDENCE_ANSWER`] verbatim; the suite pins it.
 pub const GROUNDED_SYSTEM_PROMPT: &str = "You are B2, answering questions about the user's own \
@@ -30,13 +34,52 @@ pub const CONDENSE_SYSTEM_PROMPT: &str = "Rewrite the user's latest message as o
 search query that names its subject explicitly, using the earlier conversation to fill in \
 any pronouns or references. Reply with the query text only — no preamble, no quotes.";
 
+/// The note the user is viewing when they ask (GH #253), and how much of it the request
+/// carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Focus {
+    /// Vault-relative path, the note's identity (L1).
+    pub path: String,
+    /// How many of its passages lead the request: at most [`FOCUS_PASSAGES`].
+    pub included: usize,
+    /// How many passages the note has.
+    pub total: usize,
+}
+
+/// The sentence that gives "this note" a referent, shared by condense and answer.
+fn focus_sentence(path: &str) -> String {
+    format!("The user is viewing {path}; \"this note\" or \"this doc\" means it.")
+}
+
+/// The focus lines of the grounded prompt; a trimmed note says so (limits are loud).
+fn focus_lines(focus: &Focus) -> String {
+    let sentence = focus_sentence(&focus.path);
+    if focus.included < focus.total {
+        format!(
+            "{sentence}\nOnly the first {} of its {} passages are included.",
+            focus.included, focus.total
+        )
+    } else {
+        sentence
+    }
+}
+
 /// Step 0: condense a follow-up into a standalone retrieval query (multi-turn only).
 /// Never breaks chat: any failure or blank reply degrades to the raw question. Nothing
-/// streams up.
-pub fn condense_query(llm: &dyn LlmProvider, question: &str, history: &[ChatTurn]) -> String {
+/// streams up. `focus` is the open note's path, so "this doc" condenses to its subject.
+pub fn condense_query(
+    llm: &dyn LlmProvider,
+    question: &str,
+    history: &[ChatTurn],
+    focus: Option<&str>,
+) -> String {
+    let system = match focus {
+        Some(path) => format!("{CONDENSE_SYSTEM_PROMPT}\n\n{}", focus_sentence(path)),
+        None => CONDENSE_SYSTEM_PROMPT.to_string(),
+    };
     let req = ChatRequest {
         kind: RequestKind::Condense,
-        system: CONDENSE_SYSTEM_PROMPT.to_string(),
+        system,
         turns: turns_with_question(history, question),
         passages: Vec::new(),
         tools: Vec::new(),
@@ -62,15 +105,21 @@ pub fn condense_query(llm: &dyn LlmProvider, question: &str, history: &[ChatTurn
     }
 }
 
-/// Step 2: assemble the grounded chat request.
+/// Step 2: assemble the grounded chat request. With a `focus`, its passages are expected
+/// to lead `passages`.
 pub fn build_request(
     question: &str,
     history: &[ChatTurn],
     passages: Vec<ContextPassage>,
+    focus: Option<&Focus>,
 ) -> ChatRequest {
+    let system = match focus {
+        Some(f) => format!("{GROUNDED_SYSTEM_PROMPT}\n\n{}", focus_lines(f)),
+        None => GROUNDED_SYSTEM_PROMPT.to_string(),
+    };
     ChatRequest {
         kind: RequestKind::Chat,
-        system: GROUNDED_SYSTEM_PROMPT.to_string(),
+        system,
         turns: turns_with_question(history, question),
         passages,
         tools: Vec::new(),

@@ -222,16 +222,18 @@ export const api = {
 
   /**
    * One grounded answer (flow ④, `Vault::ask`), streamed per token. `history` is the
-   * caller's and session-only (S4): nothing about a chat is stored.
+   * caller's and session-only (S4): nothing about a chat is stored. `focus` is the open
+   * note's path, or null (GH #253).
    */
   ask: (
     question: string,
     history: ChatTurn[],
+    focus: string | null,
     onToken: (text: string) => void,
   ): Promise<AnswerView> => {
     const channel = new Channel<string>();
     channel.onmessage = onToken;
-    return invoke("ask", { question, history, onEvent: channel });
+    return invoke("ask", { question, history, focus, onEvent: channel });
   },
 
   /**

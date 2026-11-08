@@ -345,9 +345,18 @@ Sources:
   [2] concepts/forgetting-curve.md
 ```
 
+`--note PATH` says which note the question is about, so "this note" and "this doc" have a
+referent. That note's passages come first (up to 8, in order; the model is told when a long
+note was cut short), then the usual retrieval fills in from the rest of the vault:
+
+```console
+$ b2 ask --note notes/spaced-repetition.md "what is this note missing?"
+```
+
 `b2 chat` is the interactive form: follow-up questions remember the conversation, Ctrl-C
-stops an answer mid-stream (the partial text stands), `/exit` leaves. The desktop app has the
-same thing as a chat pane (⌘J).
+stops an answer mid-stream (the partial text stands), `/exit` leaves. `b2 chat --note PATH`
+keeps one note in focus for every turn. The desktop app has the same thing as a chat pane
+(⌘J), where the focus is the note you have open, shown as an "about:" chip by the composer.
 
 A reader, not a writer: chat stores nothing. No transcript, no cache, session-only history.
 Nothing about a chat is ever written to your notes or the index, and swapping chat models is
@@ -452,8 +461,8 @@ your notes. Nothing locks you in.
 | `b2 write <note>` | Replace a note's body from stdin: the scripting/agent editing surface. Frontmatter is left alone | no |
 | `b2 mv <from> <to>` | Move/rename a note, file, or folder and repair every inbound link | re-embeds touched |
 | `b2 rm <target>` | Delete a note, file, or folder from the vault and disk (`-r` for a folder). Inbound links dangle and are surfaced, never rewritten | no |
-| `b2 ask <question>` | One grounded, cited, streamed answer from your notes. `--llm-url`, `--llm-model`; `--json` is a JSONL event stream | embeds query + model server |
-| `b2 chat` | Interactive grounded chat; session-only history, nothing stored. Ctrl-C stops an answer; `/exit` leaves | embeds query + model server |
+| `b2 ask <question>` | One grounded, cited, streamed answer from your notes. `--note PATH` makes it about one note; `--llm-url`, `--llm-model`; `--json` is a JSONL event stream | embeds query + model server |
+| `b2 chat` | Interactive grounded chat; session-only history, nothing stored. `--note PATH` as `ask`. Ctrl-C stops an answer; `/exit` leaves | embeds query + model server |
 
 ## Config and environment
 

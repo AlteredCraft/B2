@@ -5,12 +5,14 @@ import {
   STREAMING_ROW_KEY,
   answerMessage,
   chatEmptyState,
+  chatFocus,
   chatReady,
   chatStateOf,
   chatHistory,
   chatRows,
   citationRowKey,
   errorMessage,
+  focusChipLabel,
   formatModelSize,
   modelDetail,
   pullCommand,
@@ -250,4 +252,17 @@ test("an installed model's detail is its parameters and size, whichever it has",
   assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: null }), "1.9 GB");
   assert.equal(modelDetail({ name: "m", size: 0, parameters: "3.2B" }), "3.2B");
   assert.equal(modelDetail({ name: "m", size: 0, parameters: null }), "");
+});
+
+test("the open note is chat's focus; a resource or an empty pane is none", () => {
+  const note = { path: "Toy/ForgeOS.md", title: "ForgeOS" };
+  assert.deepEqual(chatFocus({ current: note, currentResource: null }), note);
+  assert.equal(chatFocus({ current: null, currentResource: { path: "img/a.png" } }), null);
+  assert.equal(chatFocus({ current: null, currentResource: null }), null);
+});
+
+test("the focus chip names the note by title, else by path", () => {
+  assert.equal(focusChipLabel({ path: "Toy/ForgeOS.md", title: "ForgeOS" }), "about: ForgeOS");
+  assert.equal(focusChipLabel({ path: "Toy/ForgeOS.md", title: null }), "about: Toy/ForgeOS.md");
+  assert.equal(focusChipLabel({ path: "Toy/ForgeOS.md", title: "" }), "about: Toy/ForgeOS.md");
 });
