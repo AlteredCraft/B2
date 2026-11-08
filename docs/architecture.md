@@ -112,6 +112,10 @@ missing final newline all survive (W5). Against that backdrop, every byte B2 wri
 mechanics of a command you invoked (W1, ADR-0004). The complete list of on-command writes is
 [invariants.md W3](invariants.md).
 
+Chat is the one place a model drafts body bytes, and it still cannot write them: a `b2_edit`
+tool call is a *proposal*, shown as a diff, landed only by your Apply through the same guarded
+save, and recorded so one Undo reverses exactly that edit (ADR-0023).
+
 `b2 mv` never breaks the graph. A note's identity is its path, so a move is a re-key, not a
 rebuild: children reference `notes(path)` with `ON UPDATE CASCADE`, so one statement carries
 chunks, vectors, and edges across, and inbound link text is repaired in exactly the files the

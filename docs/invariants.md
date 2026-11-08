@@ -48,7 +48,9 @@ drops in without a redesign.
   ([index-engine.md](index-engine.md) §8,
   [GH #170](https://github.com/AlteredCraft/B2/issues/170))
 - **S4. No durable B2-derived state outside the Markdown.** No event log, no sidecar files, no
-  facts that live only in the index. The scope is *B2-derived* data. Your own folder tree is
+  facts that live only in the index. The scope is *B2-derived* data. The chat edit journal
+  under `.b2/edits/` (ADR-0023) is disposable cache holding copies of your own bytes: delete
+  it and you lose undo history, nothing else. Your own folder tree is
   vault material, and the filesystem is authoritative for it: folders are never projected, and
   the tree listing is a live walk of the disk. ([data-model.md](data-model.md), "Folders")
 - **S5. A schema change is a version bump plus a rebuild, never a data migration.**
@@ -61,11 +63,13 @@ drops in without a redesign.
   mechanics of a command you ran (W3). Reading a vault (walking it, projecting it, reindexing
   it) writes nothing. `reindex` runs unchanged on a read-only vault, and a git-versioned vault
   shows no diff from having been indexed. ([data-model.md](data-model.md) §1)
-- **W2. B2 never authors the note body, and never asks it to carry B2 syntax.** The body is
-  100% your document. The one body edit B2 composes itself is the mechanical move repair:
-  when a note moves, B2 rewrites the *path text* inside inbound `[[oldpath|alias]]` links so
-  they keep resolving. It fixes a link you already wrote. It never adds one, and aliases
-  survive verbatim. (The editor save, `Vault::write`, also replaces the body, but with bytes
+- **W2. B2 lands no body bytes you did not accept, and never asks the body to carry B2
+  syntax.** The body is your document. Two kinds of body bytes come from B2 rather than from
+  your keyboard, and both land only on your command: the mechanical move repair (when a note
+  moves, B2 rewrites the *path text* inside inbound `[[oldpath|alias]]` links so they keep
+  resolving; it never adds a link, and aliases survive verbatim), and a chat edit you
+  accepted (ADR-0023). A chat edit is a proposal until you accept it; the model's tool call
+  writes nothing. (The editor save, `Vault::write`, also replaces the body, but with bytes
   *you* wrote; B2 is only the carrier, W3.) ([data-model.md](data-model.md) §0)
 - **W3. The on-command writes are a short, closed list:**
   - `b2 link` appends one `b2_relations:` entry (frontmatter, never the body).
@@ -76,6 +80,10 @@ drops in without a redesign.
     frontmatter bytes, body untouched. B2 owns no line in that block and judges none.
   - Import (`Vault::import_file` / `import_path`): the handed bytes copied verbatim, then
     projected.
+  - Apply an accepted chat edit (`Vault::apply_edits`): the same guarded splice, body only,
+    of hunks you reviewed and accepted (ADR-0023). Refused on a changed revision.
+  - Undo an applied chat edit (`Vault::undo_edit`): the guarded restore of the recorded prior
+    bytes, or the exact reverse hunk; refused, never guessed, when neither applies.
   - Create, move, and delete of notes, resources, and folders, on explicit command.
 - **W4. B2 never deletes, moves, or archives your files on its own.** Consequences of your
   edits (orphans, dangling links, hash-matched move candidates) are surfaced, flagged, or
