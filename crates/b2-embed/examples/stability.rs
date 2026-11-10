@@ -21,7 +21,7 @@
 //! ```
 //!
 //! The fake embedder is the default because it is deterministic, so the baseline can be
-//! committed (a real-model one is device-specific, ADR-0007). It exaggerates pool effects;
+//! committed (a real-model one is device-specific, M2). It exaggerates pool effects;
 //! use `--model` for real magnitudes.
 //!
 //! Never a gate: exit status is 0 for any completed measurement.

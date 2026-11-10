@@ -462,7 +462,7 @@ export interface SkippedNote {
 }
 
 /**
- * `Vault::project` — what the model-free projection pass did (docs/index-engine.md). Once
+ * `Vault::project` — what the model-free projection pass did (docs/architecture.md). Once
  * it resolves, the tree and keyword search are live. One bad file never aborts it.
  */
 export interface ProjectReport {

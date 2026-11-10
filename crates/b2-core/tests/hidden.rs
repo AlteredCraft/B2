@@ -1,4 +1,4 @@
-//! Hidden means hidden (GH #136, data-model.md §1): a dot-prefixed name is not vault
+//! Hidden means hidden (GH #136, data-model.md): a dot-prefixed name is not vault
 //! material, and no authoring command creates one. Dot-folders are in `dirs.rs`,
 //! dot-resources in `resources.rs`; this file owns notes and the write guard.
 

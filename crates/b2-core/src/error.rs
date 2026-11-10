@@ -33,7 +33,7 @@ pub enum Error {
     ToolCallLimit { limit: usize },
 
     /// The index's recorded embedder differs from the active one, so a search would be
-    /// silently wrong (index-engine.md §8).
+    /// silently wrong (architecture.md).
     #[error("index built with embedding model {indexed}, but the active model is {active}; run `b2 reindex`")]
     ModelMismatch { indexed: String, active: String },
 
@@ -42,7 +42,7 @@ pub enum Error {
     #[error("invalid move destination: {0}")]
     MoveDestination(String),
 
-    /// `b2 mv` would overwrite an existing file (data-model.md §1).
+    /// `b2 mv` would overwrite an existing file (data-model.md).
     #[error("move target already exists: {0}")]
     MoveTargetExists(String),
 
@@ -63,7 +63,7 @@ pub enum Error {
     #[error("invalid new-note path: {0}")]
     AddDestination(String),
 
-    /// `b2 add` would overwrite an existing file (data-model.md §1).
+    /// `b2 add` would overwrite an existing file (data-model.md).
     #[error("note already exists: {0}")]
     AddTargetExists(String),
 
@@ -90,7 +90,7 @@ pub enum Error {
     #[error("write conflict: {0} changed on disk since it was read")]
     WriteConflict(String),
 
-    /// `b2 link` was given a `--type` that is not a core verb (data-model.md §2), so a
+    /// `b2 link` was given a `--type` that is not a core verb (data-model.md), so a
     /// typo is caught rather than stored.
     #[error("not a core relation verb: {0}")]
     InvalidRelation(String),

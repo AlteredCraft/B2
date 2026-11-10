@@ -8,15 +8,15 @@ use crate::error::{Error, Result};
 use yaml_rust2::{Yaml, YamlLoader};
 
 /// The frontmatter fields B2 reads, best-effort: unparseable YAML just yields empty
-/// fields. Every other key round-trips verbatim, read by nothing (data-model.md §1).
+/// fields. Every other key round-trips verbatim, read by nothing (data-model.md).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteFields {
     pub r#type: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
     pub tags: Vec<String>,
-    /// Raw `b2_relations:` entries (§2), the only home of typed edges. A generic
-    /// `relations:` key is another tool's and is not read (data-model §1).
+    /// Raw `b2_relations:` entries, the only home of typed edges. A generic
+    /// `relations:` key is another tool's and is not read (data-model.md).
     pub relations: Vec<String>,
 }
 
@@ -120,7 +120,7 @@ impl ParsedNote {
     }
 
     /// Append a typed-link `spec` to `b2_relations:`, creating the list or block if absent.
-    /// Frontmatter only, never the body (data-model §0). Errors on a flow-style list rather
+    /// Frontmatter only, never the body (data-model.md). Errors on a flow-style list rather
     /// than risk corrupting it.
     pub fn add_relation(&mut self, spec: &str) -> Result<()> {
         let quoted = yaml_quote(spec);
@@ -262,7 +262,7 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
     Ok(insert_at.map(|at| (at, indent)))
 }
 
-/// A note's display title: its filename without `.md` (data-model.md §1). A frontmatter
+/// A note's display title: its filename without `.md` (data-model.md). A frontmatter
 /// `title:` means nothing.
 pub fn display_title(path: &str) -> String {
     let name = crate::pathspec::file_name(path);

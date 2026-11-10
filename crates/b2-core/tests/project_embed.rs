@@ -1,4 +1,4 @@
-//! The projection/embedding split (index-engine.md): `project` builds the keyword and
+//! The projection/embedding split (architecture.md): `project` builds the keyword and
 //! graph index with no vectors, `embed` fills exactly the missing ones, and the two are
 //! observably equivalent to the fused `reindex` (§7.1: never rowid equality).
 

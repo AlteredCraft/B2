@@ -13,7 +13,7 @@ fn read_returns_body_and_metadata_with_frontmatter_stripped() {
 
     let note = vault.read("concepts/memory.md").unwrap();
 
-    // The title is the filename (data-model.md §1); type and created are frontmatter's.
+    // The title is the filename (data-model.md); type and created are frontmatter's.
     assert_eq!(note.path, MEMORY_PATH);
     assert_eq!(note.path, "concepts/memory.md");
     assert_eq!(note.title.as_deref(), Some("memory"));
@@ -40,7 +40,7 @@ fn read_returns_the_raw_frontmatter_block_verbatim() {
     let note = vault.read("concepts/memory.md").unwrap();
     let fm = note.frontmatter.expect("golden note has frontmatter");
 
-    // Verbatim, not re-serialized: the inert `title:` key is still there (data-model.md §1).
+    // Verbatim, not re-serialized: the inert `title:` key is still there (data-model.md).
     assert!(fm.contains(r#"title: "Human memory""#));
     assert_eq!(note.title.as_deref(), Some("memory"));
     assert!(fm.contains("type: concept"));

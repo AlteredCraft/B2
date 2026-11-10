@@ -1,6 +1,6 @@
 //! Frontmatter `b2_relations:` — the reader (→ origin=frontmatter edges), the
 //! surgical `add_relation` editor (lossless), and frontmatter-wins dedup
-//! (data-model.md §0, §2, §3).
+//! (data-model.md).
 
 mod common;
 
@@ -74,7 +74,7 @@ fn add_relation_quotes_safely() {
 
 #[test]
 fn a_generic_relations_key_is_not_b2s() {
-    // Another tool's `relations:` is an unknown key, never projected (data-model §1).
+    // Another tool's `relations:` is an unknown key, never projected (data-model.md).
     let raw = "---\ntype: note\nrelations:\n  - \"supports [[a|A]]\"\n---\nBody.\n";
     let n = parse(raw);
     assert!(n.fields().relations.is_empty(), "generic key must not read");
@@ -129,7 +129,7 @@ fn frontmatter_wins_when_the_same_edge_is_in_both_body_and_frontmatter() {
     .unwrap();
     let conn = ingest(&vault, &tmp.path().join("b2.sqlite"));
 
-    // One edge, and frontmatter wins (data-model §0/§3).
+    // One edge, and frontmatter wins (data-model.md).
     let rows: Vec<(String, Option<String>)> = {
         let mut s = conn
             .prepare("SELECT origin, explanation FROM edges WHERE src_path = ?1 AND dst_path = ?2 AND type = 'references'")
@@ -150,7 +150,7 @@ fn a_typed_relation_augments_a_body_link_as_a_second_edge() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
-    // The augment flow (data-model §2): the typed entry adds a second edge.
+    // The augment flow (data-model.md): the typed entry adds a second edge.
     fs::write(
         vault.join("a.md"),
         "---\ntype: note\ntitle: A\nb2_relations:\n  - \"supports [[b|B]] — backs it\"\n---\nSee [[b|B]].\n",

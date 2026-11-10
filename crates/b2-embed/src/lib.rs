@@ -1,4 +1,4 @@
-//! `b2-embed`: B2's real local embedder (candle, default BAAI/bge-base-en-v1.5, ADR-0020),
+//! `b2-embed`: B2's real local embedder (candle, default BAAI/bge-base-en-v1.5),
 //! behind the [`b2_core::embed::Embedder`] seam (ADR-0005). Only the adapters wire it in.
 //!
 //! The model is not bundled: [`provision`] (`b2 init`) fetches it into a shared cache, and

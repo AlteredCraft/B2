@@ -1,4 +1,4 @@
-//! Discovery candidates (index-engine.md §3) are the complement of the graph: notes near
+//! Discovery candidates (architecture.md) are the complement of the graph: notes near
 //! an anchor but not already connected, with 2-hop (triadic-closure) notes kept. Plumbing
 //! only, under the fake embedder.
 

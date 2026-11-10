@@ -68,7 +68,7 @@ const anchorOf = (s: GraphScene): GraphNode => {
 
 // --- the reading key's vocabulary ---------------------------------------------------
 
-check("core verbs color as themselves (data-model §2); tail verbs are 'other'", () => {
+check("core verbs color as themselves (data-model.md); tail verbs are 'other'", () => {
   equal(categoryOf("references"), "references", "references");
   equal(categoryOf("supports"), "supports", "supports");
   equal(categoryOf("contradicts"), "contradicts", "contradicts");

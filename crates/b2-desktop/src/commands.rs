@@ -128,7 +128,7 @@ pub fn explain_resource(
 
 /// A resource's bytes as base64, for the card's viewer (an image, today); the webview
 /// makes a `data:` URL of it, which the CSP admits. The façade re-validates the path
-/// against the inventory, since the linking note is untrusted (ADR-0016).
+/// against the inventory, since the linking note is untrusted (E5).
 #[tauri::command(async)]
 pub fn read_resource(state: State<'_, AppState>, path: String) -> Result<String, CmdError> {
     read_op(state.inner(), |v| v.read_resource_bytes(&path)).map(|bytes| BASE64.encode(bytes))
@@ -147,7 +147,7 @@ pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), Cmd
 /// same list, but this one is the authority; change them together.
 const OPENABLE_SCHEMES: [&str; 3] = ["http://", "https://", "mailto:"];
 
-/// Is this a link the host will open? A note is untrusted (ADR-0016) and `open` launches
+/// Is this a link the host will open? A note is untrusted (E5) and `open` launches
 /// whatever app claims the scheme, so this allow-list is the whole security posture.
 /// Byte-wise, so a multi-byte prefix can't panic the slice.
 fn is_openable_link(url: &str) -> bool {
@@ -162,7 +162,7 @@ fn is_openable_link(url: &str) -> bool {
 }
 
 /// Open a web link from a note in the system browser; followed in place it would replace
-/// the app. Re-checked here because the note is untrusted (ADR-0016).
+/// the app. Re-checked here because the note is untrusted (E5).
 #[tauri::command(async)]
 pub fn open_external(url: String) -> Result<(), CmdError> {
     if !is_openable_link(&url) {
@@ -422,7 +422,7 @@ pub fn embed_stats() -> Vec<crate::stats::EmbedStat> {
 }
 
 /// Every chord the menu bar takes (`menu.rs`, #119), reserved in the UI's keyboard
-/// registry (ADR-0017).
+/// registry (K1).
 #[tauri::command]
 pub fn menu_chords() -> Vec<crate::menu::MenuChord> {
     crate::menu::chords()
@@ -750,7 +750,7 @@ fn delete_dir_impl(state: &AppState, dir: &str) -> Result<DirDeleteReport, CmdEr
 }
 
 /// The testable core of `set_model`. A changed model restarts its embed-time ledger
-/// ([`stats::reset`]), since the swap re-embeds the whole corpus (ADR-0007).
+/// ([`stats::reset`]), since the swap re-embeds the whole corpus (M2).
 fn set_model_impl(model: &str) -> Result<Vec<ModelChoice>, CmdError> {
     let previous = EmbedConfig::load().ok().map(|c| c.model);
     EmbedConfig::set_model(model)?;
@@ -801,7 +801,7 @@ mod tests {
         let state = AppState::new(Some(root));
 
         let note = read_note_impl(&state, "concepts/memory").unwrap();
-        // Title is the filename (data-model.md §1); the frontmatter `title:` is inert.
+        // Title is the filename (data-model.md); the frontmatter `title:` is inert.
         assert_eq!(note.title.as_deref(), Some("memory"));
         assert!(note.body.contains("The brain encodes"));
     }

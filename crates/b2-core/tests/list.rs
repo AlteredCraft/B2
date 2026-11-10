@@ -18,7 +18,7 @@ fn list_notes_returns_every_note_ordered_by_path() {
         vec!["concepts/memory.md", "notes/spaced-repetition.md"]
     );
 
-    // The title is the filename (data-model.md §1).
+    // The title is the filename (data-model.md).
     assert_eq!(notes[0].path, MEMORY_PATH);
     assert_eq!(notes[0].title.as_deref(), Some("memory"));
     assert_eq!(notes[1].path, SRS_PATH);

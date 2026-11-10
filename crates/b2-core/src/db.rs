@@ -7,7 +7,7 @@
 //! SET path` (needs `PRAGMA foreign_keys = ON`).
 //!
 //! Vectors live in plain tables, content-addressed by the blake3 of the chunk text
-//! (ADR-0006), so they outlive their chunk; [`prune_orphan_vectors`] collects them.
+//! (M4), so they outlive their chunk; [`prune_orphan_vectors`] collects them.
 
 use crate::chunk::Chunk;
 use crate::embed::pack_f32;
@@ -25,7 +25,7 @@ use std::time::Duration;
 /// stamp drops the derived tables for the next `reindex` to rebuild; there are no
 /// migrations (ADR-0002). A stamp above this is refused untouched ([`refuse_if_newer`]).
 ///
-/// 3: plain vector tables (ADR-0006). 4: `resources`. 5: `porter unicode61` FTS (GH #157).
+/// 3: plain vector tables (M4). 4: `resources`. 5: `porter unicode61` FTS (GH #157).
 /// 6: path-keyed, content-addressed `embeddings` (GH #170). 7: unread columns and
 /// `note_aliases` dropped.
 pub const SCHEMA_VERSION: i64 = 7;
@@ -119,11 +119,11 @@ pub fn open(path: &Path) -> Result<Connection> {
 }
 
 /// Attempts at the WAL flip. Large, because these retries stand in for `busy_timeout`,
-/// which does not cover it: the whole ≈4 s budget is here (ADR-0021).
+/// which does not cover it: the whole ≈4 s budget is here (C1).
 const WAL_FLIP_ATTEMPTS: u32 = 16;
 
 /// Attempts at a DDL rebuild's `BEGIN IMMEDIATE`. Small, because each already waits the
-/// full 5 s `busy_timeout`; past ≈15 s it is a stuck writer (ADR-0021).
+/// full 5 s `busy_timeout`; past ≈15 s it is a stuck writer (C1).
 const REBUILD_ATTEMPTS: u32 = 3;
 
 /// The pause schedule [`retry_while_locked`] uses between attempts.
@@ -159,7 +159,7 @@ fn retry_while_locked<T>(
     }
 }
 
-/// Put the connection in WAL mode, waiting out a concurrent opener (ADR-0021). The flip
+/// Put the connection in WAL mode, waiting out a concurrent opener (C1). The flip
 /// takes a write lock that `busy_timeout` does not cover, so the retry is ours.
 ///
 /// The mode is read back: a filesystem without shared memory declines with `SQLITE_OK`
@@ -200,7 +200,7 @@ const SCHEMA_TABLES: [&str; 6] = [
 ];
 
 /// Bring the index to [`SCHEMA_VERSION`], atomically and serialized against other openers
-/// on SQLite's write lock (ADR-0021). The stamp commits with the tables it vouches for, and
+/// on SQLite's write lock (C1). The stamp commits with the tables it vouches for, and
 /// a current index takes no write lock at all, so a reader is never refused (C1).
 fn migrate(conn: &mut Connection) -> Result<()> {
     if schema_is_current(conn)? {
@@ -277,7 +277,7 @@ fn stamped_version(conn: &Connection) -> Result<Option<i64>> {
 }
 
 /// Drop whatever is there, create the schema and stamp `schema_version`. The DDL mirrors
-/// `index-engine.md`; vector tables are created at embed time ([`ensure_embedding_space`]).
+/// `architecture.md`; vector tables are created at embed time ([`ensure_embedding_space`]).
 ///
 /// The drop is unconditional: anything reaching here is of no known version, and
 /// surviving rows would be skipped by an incremental reindex (matching `body_hash`),
@@ -491,7 +491,7 @@ fn members_under_dir(conn: &Connection, members: Members, dir: &str) -> Result<V
 }
 
 // ---------------------------------------------------------------------------
-// resources (data-model.md §10)
+// resources (data-model.md)
 // ---------------------------------------------------------------------------
 
 /// One resource's projection into `resources`. A borrowed view like [`NoteRow`].
@@ -698,18 +698,18 @@ pub fn repoint_resource(
 // ---------------------------------------------------------------------------
 
 /// The content address of a chunk's embed input: blake3 of the stored text, which is
-/// exactly what the embedder sees (ADR-0006). No model id: a model swap drops the whole
-/// table (ADR-0007).
+/// exactly what the embedder sees (M4). No model id: a model swap drops the whole
+/// table (M2).
 pub fn text_hash(text: &str) -> String {
     blake3::hash(text.as_bytes()).to_hex().to_string()
 }
 
 /// Replace a note's chunks and return the new chunk ids in `seq` order.
 ///
-/// Vectors are shared, so they survive (ADR-0006, [`prune_orphan_vectors`]) and a re-chunk
+/// Vectors are shared, so they survive (M4, [`prune_orphan_vectors`]) and a re-chunk
 /// of unchanged text re-embeds nothing. The centroid is stale, so it is dropped.
 pub fn replace_chunks(conn: &Connection, note_path: &str, chunks: &[Chunk]) -> Result<Vec<i64>> {
-    // The model-free projection must never create the embedding space (index-engine.md).
+    // The model-free projection must never create the embedding space (architecture.md).
     if embedding_space_exists(conn)? {
         conn.execute(
             "DELETE FROM note_centroids WHERE note_path = ?1",
@@ -809,7 +809,7 @@ pub fn rebuild_fts(conn: &Connection, tokenizer: FtsTokenizer) -> Result<()> {
 
 // ---------------------------------------------------------------------------
 // embeddings: created at embed time, not in apply_schema(); their existence is the
-// "this vault has an embedding space" signal (ADR-0006).
+// "this vault has an embedding space" signal (M4).
 // ---------------------------------------------------------------------------
 
 /// Whether the embedding space (the `embeddings` table) currently exists.
@@ -818,9 +818,9 @@ pub fn embedding_space_exists(conn: &Connection) -> Result<bool> {
 }
 
 /// Ensure the vector tables exist for `(model_id, dim)`, recorded in `meta`. A model swap
-/// drops and recreates them empty, so vectors never go silently stale (ADR-0007).
+/// drops and recreates them empty, so vectors never go silently stale (M2).
 ///
-/// Serialized and atomic like [`migrate`] (ADR-0021): the desktop's reindex and a
+/// Serialized and atomic like [`migrate`] (C1): the desktop's reindex and a
 /// `b2 reindex` can overlap, and one's `DROP` after the other's `CREATE` breaks it.
 pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> Result<()> {
     if embedding_space_matches(conn, model_id, dim)? {
@@ -862,7 +862,7 @@ fn embedding_space_matches(conn: &Connection, model_id: &str, dim: usize) -> Res
 }
 
 /// The `(embed_model_id, embed_dim)` a prior ingest recorded; `None` if never embedded.
-/// Reads compare it to the active embedder and fail fast on a mismatch (ADR-0007).
+/// Reads compare it to the active embedder and fail fast on a mismatch (M2).
 pub fn recorded_embedder(conn: &Connection) -> Result<Option<(String, usize)>> {
     let model = meta_value(conn, "embed_model_id")?;
     let dim = meta_value(conn, "embed_dim")?;
@@ -892,7 +892,7 @@ pub fn set_vector(conn: &Connection, text_hash: &str, embedding: &[f32]) -> Resu
 }
 
 /// Delete every stored vector no chunk references, once the whole-vault pass's chunk set
-/// is final. Not per-row: a moved note's vectors must survive re-insertion (ADR-0006).
+/// is final. Not per-row: a moved note's vectors must survive re-insertion (M4).
 /// Requires the embedding space to exist.
 pub fn prune_orphan_vectors(conn: &Connection) -> Result<usize> {
     Ok(conn.execute(
@@ -1132,7 +1132,7 @@ pub fn note_chunk_vectors(conn: &Connection, note_path: &str) -> Result<Vec<(i64
 }
 
 /// Recompute `note_path`'s centroid from its stored chunk vectors, deleting it when there
-/// are none (ADR-0006).
+/// are none (M4).
 pub fn refresh_note_centroid(conn: &Connection, note_path: &str) -> Result<()> {
     let vectors: Vec<Vec<f32>> = note_chunk_vectors(conn, note_path)?
         .into_iter()
@@ -1197,7 +1197,7 @@ pub fn for_each_note_centroid(conn: &Connection, mut f: impl FnMut(&str, &[u8]))
 }
 
 /// Stream every embedded chunk's `(chunk_id, vector_blob)` through `f` without
-/// materializing the space (ADR-0006). The join hands a shared vector to each chunk that
+/// materializing the space (M4). The join hands a shared vector to each chunk that
 /// addresses it, since ranking is per chunk.
 pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) -> Result<()> {
     let mut stmt = conn.prepare(
@@ -1215,7 +1215,7 @@ pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) 
 }
 
 /// Every chunk's squared-L2 distance to `query`, nearest first, ties by `chunk_id`
-/// (ADR-0006).
+/// (M4).
 fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
     let mut out: Vec<(i64, f32)> = Vec::new();
     let mut scratch: Vec<f32> = Vec::new();
@@ -1227,7 +1227,7 @@ fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f
     Ok(out)
 }
 
-/// Exact brute-force search: the `k` nearest chunk ids with L2 distances (ADR-0006).
+/// Exact brute-force search: the `k` nearest chunk ids with L2 distances (M4).
 /// Vectors are normalized, so this ranks by cosine.
 pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
     let mut hits = scan_vector_distances(conn, query)?;
@@ -1308,7 +1308,7 @@ pub struct InboundEdge {
 }
 
 /// Every edge pointing at the note `dst_path`: the set a move rewrites without scanning
-/// the vault (index-engine.md §8). Ordered.
+/// the vault (architecture.md). Ordered.
 pub fn inbound_edge_targets(conn: &Connection, dst_path: &str) -> Result<Vec<InboundEdge>> {
     inbound_edges_on(conn, "dst_path", dst_path)
 }
@@ -1321,7 +1321,7 @@ pub enum InboundTarget {
 }
 
 /// Every edge pointing at one of `notes` or `resources`, tagged with its target; notes
-/// first. The graph read a move or delete starts from (index-engine.md §8).
+/// first. The graph read a move or delete starts from (architecture.md).
 pub fn inbound_edges_of(
     conn: &Connection,
     notes: &[&str],
@@ -1384,7 +1384,7 @@ pub fn resources_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> 
 }
 
 /// Re-key a note from `old_path` to `new_path`: the index-side move (ADR-0003). Child rows
-/// cascade; vectors belong to the text (ADR-0006). `edges.dst_path` has no FK, so callers
+/// cascade; vectors belong to the text (M4). `edges.dst_path` has no FK, so callers
 /// re-project inbound sources afterwards.
 ///
 /// A directory move re-keys every note before re-projecting any file, so resolution is
@@ -1423,7 +1423,7 @@ pub fn resolve_resource_target(conn: &Connection, path: &str) -> Result<Option<S
 // ---------------------------------------------------------------------------
 
 /// Whether the directed edge `(src_path, dst_path, type)` already exists
-/// (data-model.md §4).
+/// (data-model.md).
 pub fn edge_exists(
     conn: &Connection,
     src_path: &str,

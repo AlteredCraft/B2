@@ -3,7 +3,7 @@
 //! display views.
 //!
 //! Chat output is never stored, and history is session-only. Model output is untrusted
-//! (ADR-0016), enforced where it renders.
+//! (E5), enforced where it renders.
 //!
 //! [`FakeLlm`]: crate::llm::FakeLlm
 

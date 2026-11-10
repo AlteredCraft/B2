@@ -4,7 +4,7 @@
 //! `ureq` (ADR-0011): cancellation is an early return from the read loop.
 //!
 //! Ollama is the guided default; any compatible URL works. Note content leaves the machine
-//! only by explicit configuration (M5). Chat carries no index identity (contrast ADR-0007).
+//! only by explicit configuration (M5). Chat carries no index identity (contrast M2).
 
 mod provider;
 mod setup;

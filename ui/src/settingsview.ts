@@ -290,7 +290,7 @@ function generalPanelHtml(state: AppState): string {
       </div>`;
 }
 
-// Index — the vault's projection (index-engine.md §1), and the manual Reindex. Indexing is
+// Index — the vault's projection (architecture.md), and the manual Reindex. Indexing is
 // automatic (#25), so the button lives here, beside the coverage that says whether you
 // need it, rather than in the top bar.
 function indexPanelHtml(state: AppState): string {

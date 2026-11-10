@@ -1,6 +1,6 @@
 //! The app's macOS menu bar, declared rather than inherited from `Menu::default()`
-//! (ADR-0017, #119). AppKit dispatches menu chords before the webview sees the key, so K1
-//! needs them enumerable: [`MENU`] is read by [`build`] and by [`chords`] (the UI's
+//! (K1, #119). AppKit dispatches menu chords before the webview sees the key, so they
+//! must be enumerable: [`MENU`] is read by [`build`] and by [`chords`] (the UI's
 //! reference sheet and conflict check).
 //!
 //! The native items stay predefined because they route Cut/Copy/Paste into the webview.

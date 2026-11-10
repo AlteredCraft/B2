@@ -168,7 +168,7 @@ fn project_note_and_chunks(
 
     let relations = fields.relations.clone();
 
-    // Vectors are content-addressed (ADR-0006), so re-chunking unchanged text (a move)
+    // Vectors are content-addressed (M4), so re-chunking unchanged text (a move)
     // yields nothing pending.
     let pending = if rechunk {
         let chunks = chunk_body(&body, cfg);
@@ -228,7 +228,7 @@ struct NoteEmbedOutcome {
 /// Embed a note's pending pairs in batches of [`EMBED_BATCH`], calling `on_batch` per
 /// batch for progress and cancel. The cancel check runs after a batch is written, so a
 /// cancel never tears one. A finished note gets its centroid refreshed here, where vectors
-/// are written (ADR-0006), even when `pending` is empty, which heals a missing centroid.
+/// are written (M4), even when `pending` is empty, which heals a missing centroid.
 fn embed_pending(
     conn: &Connection,
     embedder: &dyn Embedder,
@@ -499,7 +499,7 @@ pub fn project_vault(ctx: ProjectionCtx, force: bool) -> Result<ProjectOutcome> 
         .collect();
     let notes_pruned = db::prune_notes_except(conn, &seen)?;
 
-    // Content-addressed vectors (ADR-0006) outlive their chunk rows; collect the
+    // Content-addressed vectors (M4) outlive their chunk rows; collect the
     // unreferenced ones now the chunk set is final.
     if db::embedding_space_exists(conn)? {
         db::prune_orphan_vectors(conn)?;
@@ -550,7 +550,7 @@ pub fn embed_vault(
 ) -> Result<EmbedOutcome> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
 
-    // Group pending chunks by note. Each hash is embedded once per run (ADR-0006); a note
+    // Group pending chunks by note. Each hash is embedded once per run (M4); a note
     // whose chunks were all claimed earlier finds its vectors stored and still refreshes
     // its centroid.
     type PendingNote = (String, Vec<(String, String)>);

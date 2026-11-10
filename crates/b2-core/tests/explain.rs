@@ -16,7 +16,7 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
     assert_eq!(view.title.as_deref(), Some("spaced-repetition"));
 
     // A typed `supports` with a why, and a bare body `references`: the two homes
-    // (data-model §8).
+    // (data-model.md).
     assert_eq!(view.connections.len(), 2, "{:?}", view.connections);
     assert!(view.connections.iter().all(|c| c.direction == "outbound"));
     assert!(view.connections.iter().all(|c| c.path == MEMORY_PATH));
@@ -150,7 +150,7 @@ fn explain_resolves_a_stem_and_a_full_path_to_the_same_note() {
 
 #[test]
 fn explain_surfaces_frontmatter_provenance() {
-    // The provenance data-model §0 says explain shows.
+    // The provenance data-model.md says explain shows.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(

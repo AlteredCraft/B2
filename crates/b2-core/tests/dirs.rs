@@ -1,4 +1,4 @@
-//! Folders (`list_dirs`, `create_dir`): the filesystem is authoritative (data-model.md §1),
+//! Folders (`list_dirs`, `create_dir`): the filesystem is authoritative (data-model.md),
 //! so both ops go straight to disk and an empty folder is as real as a full one.
 
 mod common;

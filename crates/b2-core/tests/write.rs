@@ -98,7 +98,7 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     let hits = vault.search("zettelkasten", 10).unwrap();
     assert!(hits.iter().any(|h| h.path == SRS_PATH), "FTS is current");
 
-    // A body save never edits the frontmatter home (data-model §2).
+    // A body save never edits the frontmatter home (data-model.md).
     let outbound: Vec<(String, String)> = {
         let mut s = conn
             .prepare(

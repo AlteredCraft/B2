@@ -1,5 +1,5 @@
 //! Flow ④ on the façade: grounded chat ([`Vault::ask`]) and the tool-using Why? turn
-//! ([`Vault::why_similar`], ADR-0022). Prompts and tool schemas live in [`crate::chat`].
+//! ([`Vault::why_similar`], architecture.md). Prompts and tool schemas live in [`crate::chat`].
 //! Chat is a reader: nothing model-derived is stored.
 
 use super::{AnswerView, Citation, ToolUseView, Vault};
@@ -13,7 +13,7 @@ use std::ops::ControlFlow;
 
 impl Vault {
     /// Flow ④, grounded chat: condense → retrieve → stream → cite. The provider is
-    /// injected per call: unlike the embedder it carries no index identity (ADR-0007).
+    /// injected per call: unlike the embedder it carries no index identity (M2).
     ///
     /// A failed condense falls back to the raw question. `on_token` returning `Break`
     /// cancels. A hallucinated `[n]` resolves to nothing; the text is never rewritten.
@@ -56,7 +56,7 @@ impl Vault {
     }
 
     /// Why? on a Similar & unlinked row: a grounded, cited explanation of why
-    /// `candidate_ref` surfaced for `anchor_ref`. A tool-using turn (ADR-0022) over
+    /// `candidate_ref` surfaced for `anchor_ref`. A tool-using turn (architecture.md) over
     /// [`chat::why_tools`]; every argument defaults to this pair, so `{}` is valid.
     ///
     /// - Round 1 is the lookup round and is never streamed. No tool call, or a failed

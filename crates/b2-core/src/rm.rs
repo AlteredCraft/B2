@@ -24,7 +24,7 @@ pub struct DeleteReport {
     pub dangled: Vec<String>,
 }
 
-/// What [`delete_resource`] did (L3, data-model.md §10).
+/// What [`delete_resource`] did (L3, data-model.md).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceDeleteReport {
     pub path: String,
@@ -44,7 +44,7 @@ pub struct DirDeleteReport {
 }
 
 /// Delete the note at `rel` (already resolved). Vectors stay for the whole-vault pass
-/// to collect, as they may be shared (ADR-0006).
+/// to collect, as they may be shared (M4).
 pub fn delete_note(ctx: ProjectionCtx, rel: &str) -> Result<DeleteReport> {
     let dangled = delete_set(ctx, &[rel], &[], || {
         remove_file_if_present(&ctx.root.join(rel))

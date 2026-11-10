@@ -1,4 +1,4 @@
-//! Folder ops. A folder, empty or not, is vault material like a note (data-model.md §1),
+//! Folder ops. A folder, empty or not, is vault material like a note (data-model.md),
 //! but is never indexed, so these read and write the filesystem directly.
 
 use std::fs;

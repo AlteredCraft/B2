@@ -12,7 +12,7 @@ members = [
 
 # Optimize dependencies even in dev builds, but keep our own `b2-*` crates at opt-level 0
 # so rebuilds stay fast. Unoptimized candle (and its gemm backend) embeds ~13× slower, and
-# a reindex cancel is only observed between embed batches (docs/index-engine.md), so a slow
+# a reindex cancel is only observed between embed batches (docs/architecture.md), so a slow
 # batch makes Cancel feel stuck. The `"*"` glob is needed to catch the matmul backend.
 # Cost: a cold build compiles every dependency at opt-3.
 [profile.dev.package."*"]

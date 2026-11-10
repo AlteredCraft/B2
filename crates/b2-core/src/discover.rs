@@ -1,5 +1,5 @@
 //! Connection discovery, the engine behind `b2 similar`: notes semantically near the anchor
-//! but not already linked, for the human to judge (ADR-0009). Recall-oriented: the ranked
+//! but not already linked, for the human to judge (G1). Recall-oriented: the ranked
 //! list is always served and no statistic gates membership (ADR-0014); z only grades.
 //!
 //! Two stages (#38): a coarse O(notes) centroid scan, minus the anchor and its 1-hop
@@ -79,7 +79,7 @@ fn field(conn: &Connection, anchor: &str, limit: usize, grade: bool) -> Result<O
     if !db::embedding_space_exists(conn)? {
         return Ok(None);
     }
-    // Stored vectors only (index-engine.md §3). The centroid is computed here, not read
+    // Stored vectors only (architecture.md). The centroid is computed here, not read
     // back, so an anchor mid-embed still discovers from what it has.
     let (anchor_ids, anchor_vecs): (Vec<i64>, Vec<Vec<f32>>) =
         db::note_chunk_vectors(conn, anchor)?.into_iter().unzip();

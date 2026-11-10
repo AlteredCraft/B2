@@ -1,4 +1,4 @@
-//! The vector store and the embedder seam (index-engine.md): reproducible KNN, the
+//! The vector store and the embedder seam (architecture.md): reproducible KNN, the
 //! recorded model identity, model swaps, and note centroids (GH #38).
 
 mod common;
@@ -288,7 +288,7 @@ fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
     );
 }
 
-/// Concurrent embed passes leave one intact vector space (ADR-0021, C1). The GH #55 lock is
+/// Concurrent embed passes leave one intact vector space (C1). The GH #55 lock is
 /// the CLI's alone, so a desktop and a CLI reindex really overlap. The quiet failure is a
 /// late `DROP` leaving a "complete" embed over a half-empty space.
 #[test]

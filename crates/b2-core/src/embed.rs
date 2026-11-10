@@ -1,16 +1,16 @@
-//! The embedder seam (index-engine.md §6). The engine is tested against a deterministic
+//! The embedder seam (architecture.md). The engine is tested against a deterministic
 //! fake; `b2-embed`'s real model drops in here with no schema or flow change.
 
 use crate::error::Result;
 
 /// Turns note text into a vector. The dimension is fixed per model and recorded as
-/// `meta.embed_dim` (ADR-0007).
+/// `meta.embed_dim` (M2).
 ///
 /// Fallible because a real model can fail. [`embed`](Self::embed) embeds a passage and
 /// [`embed_query`](Self::embed_query) a query, for asymmetric models.
 pub trait Embedder {
     /// Stable identifier recorded in `meta.embed_model_id`. A change is a model swap
-    /// (index-engine.md §8).
+    /// (architecture.md).
     fn model_id(&self) -> &str;
     /// Vector dimension; must equal the recorded `meta.embed_dim`.
     fn dim(&self) -> usize;
@@ -79,7 +79,7 @@ impl Embedder for FakeEmbedder {
 }
 
 /// Pack a vector as a little-endian float32 BLOB, the stored form of every vector
-/// (index-engine.md §3).
+/// (architecture.md).
 pub fn pack_f32(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
     for x in v {

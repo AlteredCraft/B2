@@ -2,7 +2,7 @@
 //! its real speed. The adapter times the embed pass because `b2-core` has no clock.
 //!
 //! A bucket covers the model's current stint: [`reset`] drops it on a switch to that model,
-//! since the swap re-embeds the whole corpus (ADR-0007). Best-effort throughout.
+//! since the swap re-embeds the whole corpus (M2). Best-effort throughout.
 
 use crate::state_file;
 use serde::{Deserialize, Serialize};

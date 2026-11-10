@@ -15,7 +15,7 @@ use std::fs;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-/// The two golden-vault notes (data-model.md §8), by path, which is their identity (L1,
+/// The two golden-vault notes (data-model.md), by path, which is their identity (L1,
 /// GH #170).
 pub const MEMORY_PATH: &str = "concepts/memory.md";
 pub const SRS_PATH: &str = "notes/spaced-repetition.md";

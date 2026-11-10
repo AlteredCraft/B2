@@ -21,11 +21,11 @@ pub struct ParsedLink {
     pub target_path: String,
     /// Trailing text after `—`/`:` on a typed frontmatter entry.
     pub explanation: Option<String>,
-    /// An embed form (`![…]`): a display nicety, never a distinct verb (data-model.md §3).
+    /// An embed form (`![…]`): a display nicety, never a distinct verb (data-model.md).
     pub embed: bool,
     /// A Markdown-form link, resolved note-relative first, then vault-root.
     pub md_form: bool,
-    /// The alt, link text or alias; the edge's `caption` (data-model.md §3).
+    /// The alt, link text or alias; the edge's `caption` (data-model.md).
     pub caption: Option<String>,
 }
 
@@ -66,7 +66,7 @@ pub(crate) fn link_spans(text: &str) -> Vec<LinkSpan> {
     spans
 }
 
-/// Every link in `body` as an untyped `references` edge (data-model §2).
+/// Every link in `body` as an untyped `references` edge (data-model.md).
 pub fn parse_links(body: &str) -> Vec<ParsedLink> {
     link_spans(body)
         .iter()
@@ -86,7 +86,7 @@ fn reference(text: &str, span: &LinkSpan) -> ParsedLink {
     }
 }
 
-/// Parse a typed spec `<verb> [[path|alias]] [— explanation]` (data-model §2).
+/// Parse a typed spec `<verb> [[path|alias]] [— explanation]` (data-model.md).
 fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
     // A lowercase-kebab verb.
     let verb_end = rest.find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
@@ -120,7 +120,7 @@ fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
 }
 
 /// Parse one `b2_relations:` entry: a typed spec, or a bare `[[…]]` ⇒ `references`. The
-/// only parser that yields a verb or explanation (data-model §2).
+/// only parser that yields a verb or explanation (data-model.md).
 pub fn parse_relation(spec: &str) -> Option<ParsedLink> {
     let spec = spec.trim();
     if let Some(link) = parse_typed_spec(spec) {
@@ -132,8 +132,8 @@ pub fn parse_relation(spec: &str) -> Option<ParsedLink> {
     spans.first().map(|span| reference(spec, span))
 }
 
-/// Render a typed `b2_relations:` entry, the inverse of [`parse_relation`] (data-model
-/// §2). `target_path` is written verbatim; a blank explanation is omitted.
+/// Render a typed `b2_relations:` entry, the inverse of [`parse_relation`]
+/// (data-model.md). `target_path` is written verbatim; a blank explanation is omitted.
 pub fn render_relation(verb: &str, target_path: &str, explanation: Option<&str>) -> String {
     match explanation.map(str::trim).filter(|e| !e.is_empty()) {
         Some(e) => format!("{verb} [[{target_path}]] — {e}"),
@@ -142,7 +142,7 @@ pub fn render_relation(verb: &str, target_path: &str, explanation: Option<&str>)
 }
 
 /// Collect every link in `line` as a [`LinkSpan`] offset by `base`. Markdown-form links
-/// count only for vault targets (data-model.md §10).
+/// count only for vault targets (data-model.md).
 fn scan_line(line: &str, base: usize, out: &mut Vec<LinkSpan>) {
     let mut i = 0;
     while i < line.len() {
@@ -259,7 +259,7 @@ fn is_external_target(target: &str) -> bool {
     }
 }
 
-/// The explanation after a typed link, introduced by `—` or `:` (data-model §2).
+/// The explanation after a typed link, introduced by `—` or `:` (data-model.md).
 fn extract_explanation(tail: &str) -> Option<String> {
     let t = tail.trim_start();
     let body = t.strip_prefix('—').or_else(|| t.strip_prefix(':'))?;
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn a_verb_shaped_body_list_item_is_just_a_reference() {
-        // The body carries no typed syntax (data-model §2).
+        // The body carries no typed syntax (data-model.md).
         let links = parse_links("- supports [[papers/x.pdf|the paper]] — key evidence");
         assert_eq!(links.len(), 1);
         let l = &links[0];

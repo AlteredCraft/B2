@@ -1,4 +1,4 @@
-//! Groundedness + citation-accuracy smoke for the chat seam (ADR-0013). An example, not a
+//! Groundedness + citation-accuracy smoke for the chat seam (evals.md). An example, not a
 //! test: it needs real models and the network, and is non-deterministic.
 //!
 //! ```console

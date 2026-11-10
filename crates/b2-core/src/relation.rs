@@ -6,11 +6,11 @@
 pub struct CoreVerb {
     pub verb: &'static str,
     /// The display label for an inbound edge; edges are stored once, directed
-    /// (data-model.md §2).
+    /// (data-model.md).
     pub inverse: &'static str,
 }
 
-/// The closed core (data-model.md §2). Order mirrors the doc's table.
+/// The closed core (data-model.md). Order mirrors the doc's table.
 pub const CORE: &[CoreVerb] = &[
     CoreVerb {
         verb: "references",
@@ -37,7 +37,7 @@ pub fn is_core(verb: &str) -> bool {
 }
 
 /// The display label for an inbound edge of type `verb`. Core verbs map to their
-/// inverse; a tail verb is opaque, so the verb itself is returned (data-model §2).
+/// inverse; a tail verb is opaque, so the verb itself is returned (data-model.md).
 pub fn inverse_label(verb: &str) -> &str {
     core(verb).map_or(verb, |c| c.inverse)
 }

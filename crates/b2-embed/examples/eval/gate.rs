@@ -86,7 +86,7 @@ pub fn passes(
         return false;
     }
     // The search-evidence rows (ADR-0015, GH #202). Search's bar moves no discovery rank, so
-    // movement above is a bug. Skipped when the model has no calibrated bar (ADR-0007).
+    // movement above is a bug. Skipped when the model has no calibrated bar (M2).
     match read_shipped_bar(evidence, model_id) {
         None => eprintln!(
             "\n[note] no calibrated evidence bar for {model_id} — D2's exit-gate rows are not \

@@ -50,7 +50,7 @@ impl OpenAiCompatProvider {
         Self { config, agent }
     }
 
-    /// Fail fast before a human waits (ADR-0020): `GET {base}/models`.
+    /// Fail fast before a human waits: `GET {base}/models`.
     ///
     /// 1. Is this a chat endpoint? A transport failure is unreachable; any HTTP refusal is
     ///    a refusal, since a 404 can't be told apart from a wrong path. A 2xx whose body

@@ -9,7 +9,7 @@ use crate::{SIM_K, Z_SCAN_LIMIT};
 use b2_core::vault::Vault;
 
 /// A full pass over the discovery labels: rank aggregates, the negative-anchor tally, and
-/// the cosine calibration piles (index-engine.md §3, PR #145).
+/// the cosine calibration piles (architecture.md, PR #145).
 #[derive(Default)]
 pub struct SimilarPass {
     /// Rank of the first `expected` hit per positive anchor.

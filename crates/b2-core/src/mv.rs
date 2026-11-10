@@ -3,7 +3,7 @@
 //! Identity is the path (ADR-0003, L1/L3), so a move re-keys: it rewrites the link text in
 //! every file linking at a moved member, repoints the index rows (`ON UPDATE CASCADE`
 //! carries chunks, centroid and outbound edges), and re-projects the inbound sources,
-//! whose `edges.dst_path` has no FK. Vectors are untouched (ADR-0006).
+//! whose `edges.dst_path` has no FK. Vectors are untouched (M4).
 //!
 //! Every move builds a [`MoveSet`] and runs [`execute`]: Markdown first, then re-project.
 //! Cost is O(inbound links) via [`db::inbound_edges_of`]. Known gap: rewrites are keyed by
@@ -60,7 +60,7 @@ pub fn move_note(ctx: EmbedCtx, old_rel: &str, new_rel_input: &str) -> Result<Mo
 }
 
 /// What [`move_resource`] did. Same fields as [`MoveReport`] (GH #170), kept separate as
-/// a separate contract (data-model.md §10).
+/// a separate contract (data-model.md).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceMoveReport {
     pub from: String,
@@ -320,7 +320,7 @@ fn refuse_same_path(new_rel: &str, old_rel: &str, subject: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refuse an occupied destination rather than clobber it (data-model.md §1), except a
+/// Refuse an occupied destination rather than clobber it (data-model.md), except a
 /// case-only rename on a case-insensitive filesystem ([`is_same_dirent`]).
 fn refuse_occupied(old_abs: &Path, new_abs: &Path, new_rel: &str) -> Result<()> {
     if new_abs.exists() && !is_same_dirent(old_abs, new_abs) {

@@ -28,7 +28,7 @@ import type { ChordProblem, Overrides } from "./keymap";
 export type SideSection = "similar" | "connections";
 
 /**
- * The closed stance core (b2-core `relation.rs` CORE, data-model.md §2). The host
+ * The closed stance core (b2-core `relation.rs` CORE, data-model.md). The host
  * re-validates `is_core`, so a drifted entry here is refused, never stored. `references`
  * is the default, matching `b2 link`.
  */

@@ -124,7 +124,7 @@ check("a folded card stays a row; only its body goes", () => {
   equal(rows[4].expanded, true, "its neighbour is untouched");
 });
 
-// Two edges to one target are legal (data-model.md §2) and share one fold key, but row
+// Two edges to one target are legal (data-model.md) and share one fold key, but row
 // keys must stay unique or ↓ off the second lands back on the first.
 check("duplicate edges to one note are distinct rows sharing one fold key", () => {
   const rows = sideRows(pane({ connections: [edge("notes/a.md"), edge("notes/a.md", "supports")] }));

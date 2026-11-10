@@ -1,6 +1,6 @@
 //! Whole-space retrieval stays exhaustive: every path that scans the vector space returns
 //! complete results, with no silent cap. Asserted on the cap-bearing primitive and on a
-//! modest vault rather than a 4096-chunk one (ADR-0006, GH #46).
+//! modest vault rather than a 4096-chunk one (M4, GH #46).
 
 mod common;
 

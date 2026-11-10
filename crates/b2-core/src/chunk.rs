@@ -1,5 +1,5 @@
 //! Body chunker, the [tobi/qmd](https://github.com/tobi/qmd) heuristic adapted
-//! (index-engine.md §1, GH #19): size-targeted, overlapping, Markdown-aware chunks, each
+//! (architecture.md, GH #19): size-targeted, overlapping, Markdown-aware chunks, each
 //! with a `heading_path` breadcrumb. At the target size it scans back for the best
 //! structural break under a quadratic distance decay, and never cuts inside a code fence
 //! or table (#41).
@@ -9,7 +9,7 @@
 //! `char_start..char_end` addresses the source slice, except that
 //! `cfg.prepend_heading_path` adds text outside it.
 
-/// The tuning surface for [`chunk_body`] (index-engine.md §1). `Default` is the shipped
+/// The tuning surface for [`chunk_body`] (architecture.md). `Default` is the shipped
 /// config; `make eval-sweep` varies it in one process.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkConfig {
@@ -44,7 +44,7 @@ impl Default for ChunkConfig {
     }
 }
 
-/// Markdown break-point weights (index-engine.md §1). Higher = a cleaner place to cut.
+/// Markdown break-point weights (architecture.md). Higher = a cleaner place to cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BreakWeights {
     /// H1..H6 (index 0 = H1). qmd: H1=100, H2=90, then a gentle gradient.

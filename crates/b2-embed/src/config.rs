@@ -13,7 +13,7 @@ pub const DEFAULT_MODEL: &str = "BAAI/bge-base-en-v1.5";
 
 /// One embedding model B2 can run, as offered in the settings picker. `id` lands in
 /// `meta.embed_model_id`, so choosing another is a model swap that re-embeds on the next
-/// `reindex` (index-engine.md §8).
+/// `reindex` (architecture.md).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelInfo {
     /// Repo id == `meta.embed_model_id` (e.g. `BAAI/bge-base-en-v1.5`).
@@ -65,7 +65,7 @@ pub struct ModelChoice {
 }
 
 /// bge's retrieval instruction, prepended to *queries only* (asymmetric retrieval,
-/// index-engine.md §5). Documents are embedded verbatim. Empty ⇒ symmetric.
+/// architecture.md). Documents are embedded verbatim. Empty ⇒ symmetric.
 pub const DEFAULT_QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
 
 /// The standard Hugging Face mirror knob, used when the config's `source` names none.
@@ -86,7 +86,7 @@ pub enum Source {
 /// The resolved embedder configuration.
 #[derive(Debug, Clone)]
 pub struct EmbedConfig {
-    /// Recorded as `meta.embed_model_id`; changing it re-embeds (index-engine.md §8).
+    /// Recorded as `meta.embed_model_id`; changing it re-embeds (architecture.md).
     pub model: String,
     /// Where to fetch the files from.
     pub source: Source,
