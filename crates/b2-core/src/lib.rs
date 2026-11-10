@@ -1,7 +1,7 @@
 //! B2 index engine (`b2.sqlite`) — a **disposable** projection of Markdown (ADR-0002).
 //! The schema is derived from `data-model.md` and must satisfy it, never the reverse.
 //! SQLite is bundled and statically linked with FTS5 compiled in; vectors are plain BLOB
-//! tables scored in-process, so no extension is needed (ADR-0006, ADR-0019).
+//! tables scored in-process, so no extension is needed (M4).
 
 pub mod add;
 pub mod chat;

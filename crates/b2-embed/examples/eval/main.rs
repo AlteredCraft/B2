@@ -1,5 +1,5 @@
 //! Semantic-retrieval + discovery eval — the pass that scores model quality **out of CI**
-//! (ADR-0013). It lives as an *example*, not a test, so it never runs in the deterministic
+//! (evals.md). It lives as an *example*, not a test, so it never runs in the deterministic
 //! `cargo test` suite and quality can never flake CI.
 //!
 //! ```console
@@ -135,7 +135,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let mut vault = Vault::open_with_embedder(vault_root, Box::new(embedder.clone()))?;
 
     // ---- Phase 1: projection only → the BM25-only baseline. ------------------
-    // No vectors yet, so search runs keyword-only (index-engine.md).
+    // No vectors yet, so search runs keyword-only (architecture.md).
     let report = vault.project(false)?;
     let bm25 = score_pass(&vault, &positives, Retrieval::Fused)?;
     eprintln!(

@@ -1,4 +1,4 @@
-//! Hybrid retrieval (flow ②, index-engine.md §4): BM25 and vector fused by RRF (k=60),
+//! Hybrid retrieval (flow ②, architecture.md): BM25 and vector fused by RRF (k=60),
 //! resolved to notes. Under the fake embedder these prove plumbing, not model quality.
 
 mod common;

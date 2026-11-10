@@ -119,7 +119,7 @@ fn an_occupied_destination_is_refused_rather_than_clobbered() {
     assert_eq!(
         fs::read_to_string(root.join(MEMORY_PATH)).unwrap(),
         before,
-        "the vault never overwrites (data-model.md §1)"
+        "the vault never overwrites (data-model.md)"
     );
 }
 

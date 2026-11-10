@@ -1,4 +1,4 @@
-//! The typed graph projection, `neighbors`, and `incremental ≡ full` (index-engine.md).
+//! The typed graph projection, `neighbors`, and `incremental ≡ full` (architecture.md).
 
 mod common;
 
@@ -65,7 +65,7 @@ fn golden_graph_has_inline_references_and_frontmatter_supports() {
                 0,
                 None,
             ),
-            // A `b2_relations:` entry with explanation (data-model §2/§8).
+            // A `b2_relations:` entry with explanation (data-model.md).
             (
                 SRS_PATH.to_string(),
                 Some(MEMORY_PATH.to_string()),

@@ -42,7 +42,7 @@ impl Embedder for SharedEmbedder {
 
 /// `LocalEmbedder::embed_batch` must equal `embed` row by row: padding must not move a CLS
 /// vector, or every stored vector and every score here is silently wrong. Lives here, not in
-/// `cargo test`, because it needs the real model (ADR-0013).
+/// `cargo test`, because it needs the real model (evals.md).
 pub fn check_batch_matches_single(model: &dyn Embedder) -> Result<(), Box<dyn std::error::Error>> {
     // Varied lengths, so batching pads.
     let texts = [

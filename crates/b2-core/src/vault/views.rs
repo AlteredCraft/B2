@@ -238,7 +238,7 @@ pub struct QueryTermView {
 }
 
 /// One chunk-level search hit, not deduped to notes, with the chunk's full text. For
-/// the retrieval eval, whose chunking levers note-rank scoring can't see (ADR-0013).
+/// the retrieval eval, whose chunking levers note-rank scoring can't see (evals.md).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ChunkSearchResult {
     pub path: String,
@@ -288,7 +288,7 @@ pub struct Citation {
 }
 
 /// One `b2 similar` candidate: a note near the anchor, not linked to it, with the
-/// passage that made it similar. The human decides whether to link it (ADR-0009).
+/// passage that made it similar. The human decides whether to link it (G1).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SimilarView {
     pub path: String,

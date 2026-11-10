@@ -1,4 +1,4 @@
-//! Ingest and the link resolver (index-engine.md). Since GH #170 the path is the identity,
+//! Ingest and the link resolver (architecture.md). Since GH #170 the path is the identity,
 //! so `resolve_link_target` only decides whether a target names a note, tolerating a
 //! missing `.md`.
 

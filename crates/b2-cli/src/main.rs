@@ -3,7 +3,7 @@
 //! (human or `--json`). No engine logic lives here.
 //!
 //! The real embedder is not bundled: `b2 init` downloads it, and `reindex`/`search` fail
-//! fast without it (ADR-0020). `B2_EMBEDDER=fake` forces the deterministic fake.
+//! fast without it (ADR-0005). `B2_EMBEDDER=fake` forces the deterministic fake.
 
 mod args;
 mod cancel;

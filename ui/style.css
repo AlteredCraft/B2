@@ -19,7 +19,7 @@
      has to subtract it when working out what room the center has left. */
   --gutter-w: 6px;
   /* The graph's reading key (GH #22): color = relation verb (the stance trio,
-     data-model.md §2) + "other" for tail verbs, plus the dashed-teal *latent*
+     data-model.md) + "other" for tail verbs, plus the dashed-teal *latent*
      state for ghost edges from `similar`. */
   --cat-references: #64748b;
   --cat-supports: #2f9e63;

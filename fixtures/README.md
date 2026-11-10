@@ -1,49 +1,27 @@
 # Test fixtures
 
-Two committed vaults, for two different jobs. This file lives *outside* both — B2 ingests every
-`.md` under a vault root as a note, so a vault directory holds only note/resource content.
+Two committed vaults for two different jobs. This file sits outside both, because B2 treats
+every `.md` under a vault root as a note.
 
 ## `golden-vault/`
 
-The small, hand-authored vault the **deterministic integration tests** copy into a tempdir and
-assert against (fixed note *paths* — the identity, L1 — in `crates/b2-core/tests/common/mod.rs`;
-shape per `docs/data-model.md §8`). Model-free — the suite runs the `FakeEmbedder`. Change
-it only with the tests.
-
-The copy-to-a-tempdir step is now belt and braces rather than load-bearing: it existed because
-ingest could *write* to a note it met without a `b2id`, and since [GH #170] nothing does (W1). It
-stays because a test that mutates a committed fixture is a bad idea whatever the current write
-posture is, and CI's `git diff --exit-code` step would catch it either way.
-
-[GH #170]: https://github.com/AlteredCraft/B2/issues/170
+The small hand-written vault the deterministic integration tests run against: two linked
+notes and a few resources ([docs/data-model.md](../docs/data-model.md), "The golden vault").
+Tests copy it into a temp dir first (`crates/b2-core/tests/common/mod.rs`), so no suite can
+change it. Change it only together with the tests.
 
 ## `test-vault/`
 
-A **synthetic, procedurally-generated** vault (~200 notes / ~790 chunks across 10 topics),
-sized to make embedding a meaningful workload. It is for **out-of-CI throughput and
-retrieval-quality experiments** that need volume, *not* the deterministic suite:
+A synthetic, generated vault: about 200 notes and 790 chunks across 10 topics, cross-linked
+by about 2,300 body links and a few typed ones. It exists for out-of-CI work that needs
+volume:
 
-- **Embed device A/B** (CPU vs Metal GPU, GH #40) — `make compare-device` runs it and reports
-  chunks/s + speedup. On this workload Metal measured **~7× faster** than CPU. The script never
-  mutates the fixture: it works on a throwaway copy in the system tempdir (same isolation the
-  integration tests use for `golden-vault`).
-- **Retrieval-quality sanity** — the notes are drawn from per-topic sentence pools, so they form
-  real semantic clusters (vector-search, distributed-systems, rust, pkm, transformers, databases,
-  productivity, gardening, coffee, hiking) cross-linked by body `[[wikilinks]]` (~2,300 edges) and
-  a few typed frontmatter `b2_relations:`. Good for eyeballing `b2 search` / `b2 similar`. It is
-  **not** the hand-labelled retrieval eval set (the eval harness under `crates/b2-embed/evals/`) — a scale
-  fixture, not a graded benchmark.
-- **Rank stability** (GH #141) — `make stability` measures how much the top of the ranking moves when
-  the retrieval pool widens under it, and diffs the shipped top-10 against the committed snapshot in
-  `crates/b2-embed/evals/stability-baseline.json`. This is the job the *scale* is load-bearing for: the
-  labelled corpus (~70 chunks) barely crosses the 60-candidate passage pool and never the
-  150-candidate note pool, so candidate width can scarcely move anything there, while ~780 chunks
-  make the pools bind. The probe runs the fake embedder on
-  a throwaway copy, so the numbers are deterministic and the fixture is never touched — but they are
-  only as stable as this vault: **editing `test-vault/` invalidates the blessed baseline**, so re-bless
-  (`make stability-bless`) in the same commit that changes the fixture.
+- **Rank stability** (`make stability`). The labelled eval corpus is too small for the
+  candidate pools to bind; this vault is big enough. **Editing it invalidates the blessed
+  baseline**, so run `make stability-bless` in the same commit.
+- **Embed throughput** (`make compare-device`): CPU against the Metal GPU.
+- **Eyeballing** `b2 search` and `b2 similar` on real clusters.
 
-The prose is templated (sentences recombined from the pools), not human-authored — realistic
-enough to cluster and embed like real notes, not meant to be read. An ad-hoc
-`b2 reindex -C fixtures/test-vault` rewrites nothing — indexing writes nothing to a vault at all
-(W1) — and the disposable `.b2/` index it builds is gitignored.
+The prose is templated and not meant to be read, and this is not the labelled eval corpus
+(that lives in `crates/b2-embed/evals/`). Both instruments work on a throwaway copy, and
+indexing never writes to a vault anyway (W1).

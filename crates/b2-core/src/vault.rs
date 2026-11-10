@@ -41,7 +41,7 @@ pub use crate::mv::{MoveReport, ResourceMoveReport};
 pub use crate::rm::{DeleteReport, DirDeleteReport, ResourceDeleteReport};
 
 /// Embedding dimension of the *fake* embedder ([`Vault::open`]). The real model
-/// brings its own (768); a model or dim swap re-embeds on `reindex` (ADR-0007).
+/// brings its own (768); a model or dim swap re-embeds on `reindex` (M2).
 const EMBED_DIM: usize = 64;
 
 /// Headroom [`Vault::search_chunks`] keeps over `limit`. Small, because each unit buys
@@ -57,13 +57,13 @@ fn note_hit_pool(limit: usize) -> usize {
 
 /// [`Vault::search_chunks`]'s hit pool: `limit` + [`TORN_READ_HEADROOM`], covering only
 /// torn reads (GH #137). Not 3×: under RRF a wider pool changes answers, and the eval
-/// cannot yet price that (GH #141, #142, ADR-0013).
+/// cannot yet price that (GH #141, #142, evals.md).
 fn chunk_hit_pool(limit: usize) -> usize {
     limit.saturating_add(TORN_READ_HEADROOM)
 }
 
 /// Candidates each retrieval signal pulls for a `limit`-sized [`Vault::search`]
-/// (ADR-0008). Public for the eval: a corpus smaller than this is blind to pool-width
+/// (architecture.md). Public for the eval: a corpus smaller than this is blind to pool-width
 /// changes, and the harness says so (GH #141).
 pub fn note_candidate_pool(limit: usize) -> usize {
     search::pool_size(note_hit_pool(limit))
@@ -96,7 +96,7 @@ impl Vault {
 
     /// Open the vault with a caller-supplied embedder.
     ///
-    /// Never mutates the embedding space (ADR-0007): only `reindex` does, so a model
+    /// Never mutates the embedding space (M2): only `reindex` does, so a model
     /// change can't silently wipe vectors. `search` fails fast on a mismatch instead.
     pub fn open_with_embedder(vault_root: &Path, embedder: Box<dyn Embedder>) -> Result<Self> {
         // Every façade op opens a `b2::vault` span, so `b2::sqlite` events carry their
@@ -124,14 +124,14 @@ impl Vault {
         ingest::EmbedCtx::new(self.ctx(), self.embedder.as_ref())
     }
 
-    /// Override the chunking policy, for the retrieval eval (ADR-0013). Does not
+    /// Override the chunking policy, for the retrieval eval (evals.md). Does not
     /// re-chunk: pair it with `project(force)`.
     pub fn set_chunk_config(&mut self, cfg: ChunkConfig) {
         self.chunk_config = cfg;
     }
 
     /// Rebuild the FTS index with a different tokenizer: the eval's lexical lever
-    /// (ADR-0013, GH #157). Not recorded; a fresh `.b2/` restores the default.
+    /// (evals.md, GH #157). Not recorded; a fresh `.b2/` restores the default.
     pub fn rebuild_fts(&self, tokenizer: db::FtsTokenizer) -> Result<()> {
         db::rebuild_fts(&self.conn, tokenizer)
     }
@@ -146,7 +146,7 @@ impl Vault {
     /// fires after each embed batch, and returning [`ControlFlow::Break`] cancels the
     /// embed phase there, leaving a consistent, resumable index.
     ///
-    /// `force` re-embeds only chunk text that changed (ADR-0006).
+    /// `force` re-embeds only chunk text that changed (M4).
     pub fn reindex_with_progress(
         &self,
         force: bool,
@@ -478,7 +478,7 @@ impl Vault {
     }
 
     /// Hybrid search (BM25 ⊕ vector → RRF) resolved to at most `limit` distinct notes,
-    /// best first (ADR-0008).
+    /// best first (architecture.md).
     ///
     /// With no vector space yet it runs BM25-only; callers read
     /// [`embed_status`](Self::embed_status) to say so. A `limit` of 0 returns early,
@@ -492,7 +492,7 @@ impl Vault {
         self.note_results(hits, query, limit)
     }
 
-    /// [`search`](Self::search)'s dense half alone: the eval's ablation arm (ADR-0013,
+    /// [`search`](Self::search)'s dense half alone: the eval's ablation arm (evals.md,
     /// GH #158). An unembedded vault returns no hits rather than falling back, or the
     /// ablation would measure the wrong signal.
     pub fn search_vector_only(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
@@ -667,7 +667,7 @@ impl Vault {
     }
 
     /// Refuse a query embedding when the stored vectors came from another embedder: the
-    /// results would be silently wrong (ADR-0007).
+    /// results would be silently wrong (M2).
     fn ensure_query_space_matches(&self) -> Result<()> {
         if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
             if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
@@ -866,7 +866,7 @@ impl Vault {
         // The title is the filename, so B2 writes no alias.
         let spec = link::render_relation(edge_type, &dst_path, explanation);
 
-        // 1. Markdown first: append to frontmatter b2_relations: (never the body, §0).
+        // 1. Markdown first: append to frontmatter b2_relations: (never the body, G2).
         let abs = self.root.join(&src_path);
         let mut parsed = note::parse(&fs::read_to_string(&abs)?);
         parsed.add_relation(&spec)?;
@@ -895,7 +895,7 @@ impl Vault {
 
     /// Move or rename the note `note_ref` to `to` (`.md` optional), rewriting every
     /// inbound link. The note's rows re-key, so the graph never breaks and its chunks
-    /// are not re-embedded (ADR-0003, ADR-0006).
+    /// are not re-embedded (ADR-0003, M4).
     ///
     /// Rewritten inbound files re-embed, so adapters open with the real model.
     pub fn move_note(&self, note_ref: &str, to: &str) -> Result<MoveReport> {
@@ -942,7 +942,7 @@ impl Vault {
     }
 
     /// Create a new, empty note model-free (the desktop's New note). No embedder, so a
-    /// fake-opened vault can't write foreign vectors into a real space (ADR-0007).
+    /// fake-opened vault can't write foreign vectors into a real space (M2).
     pub fn create_note(&self, path: &str) -> Result<AddReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "create", path).entered();
         let created = self.today()?;

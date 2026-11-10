@@ -1,7 +1,7 @@
 //! The chat seam, `LlmProvider` (ADR-0005). The engine is tested against [`FakeLlm`];
 //! `b2-llm`'s real provider drops in through the same trait.
 //!
-//! Unlike the embedder, chat has no index identity (contrast ADR-0007): output is never
+//! Unlike the embedder, chat has no index identity (contrast M2): output is never
 //! stored, so a model swap never reindexes. Streaming is the contract: the token callback's
 //! return value cancels. Sync (ADR-0011): cancelling returns early from a blocking read.
 

@@ -62,7 +62,7 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
     labels.sort_unstable();
     assert_eq!(labels, vec!["referenced-by", "supported-by"]);
 
-    // Title is the filename (data-model.md §1).
+    // Title is the filename (data-model.md).
     assert!(ns.iter().all(|n| n.path == SRS_PATH));
     assert!(ns.iter().all(|n| n.direction == "inbound"));
     assert!(ns.iter().all(|n| n.path == "notes/spaced-repetition.md"));

@@ -1,5 +1,5 @@
 //! Graph queries over the typed `edges` table. Materialized so backlinks are one indexed
-//! lookup rather than a full-vault scan (index-engine.md §3).
+//! lookup rather than a full-vault scan (architecture.md).
 
 use crate::error::Result;
 use crate::relation;
@@ -20,10 +20,10 @@ pub struct Neighbor {
     pub other: String,
     pub edge_type: String,
     pub direction: Direction,
-    /// The verb outbound, its inverse label inbound (data-model.md §2).
+    /// The verb outbound, its inverse label inbound (data-model.md).
     pub label: String,
     pub explanation: Option<String>,
-    /// `inline` (a body link) or `frontmatter` (a `b2_relations:` entry) (data-model.md §0).
+    /// `inline` (a body link) or `frontmatter` (a `b2_relations:` entry) (data-model.md).
     pub origin: String,
 }
 
@@ -75,7 +75,7 @@ fn collect_neighbors(
 }
 
 /// A dangling outbound link: no note or resource at its target (a typo, or a folder;
-/// data-model.md §1). Surfaced, not dropped (GH #12).
+/// data-model.md). Surfaced, not dropped (GH #12).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unresolved {
     /// The target as authored (`dst_path_raw`).

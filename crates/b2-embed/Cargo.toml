@@ -35,7 +35,7 @@ candle-transformers = { version = "0.11", features = ["accelerate"] }
 
 # Run the forward pass on the Metal GPU (GH #40), additive over `accelerate`, with a CPU
 # fallback (`model.rs::select_device`). Switching device is a model swap (the model id gains
-# `@metal`), so it forces a re-embed (ADR-0007). macOS-only: don't pass `--features metal` on
+# `@metal`), so it forces a re-embed (M2). macOS-only: don't pass `--features metal` on
 # Linux.
 [features]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]

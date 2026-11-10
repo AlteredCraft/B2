@@ -3,7 +3,7 @@
 //! Class is decided by extension only, no content sniffing. [`ResourceClass::Binary`] is
 //! the fallback, so every file classifies.
 
-/// The closed class table (data-model.md §10) for everything that is not a note.
+/// The closed class table (data-model.md) for everything that is not a note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceClass {
     Text,
@@ -49,7 +49,7 @@ impl ResourceClass {
     }
 }
 
-/// Which arm of the vault an argument names (data-model.md §10). In core so the adapters
+/// Which arm of the vault an argument names (data-model.md). In core so the adapters
 /// can't drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {

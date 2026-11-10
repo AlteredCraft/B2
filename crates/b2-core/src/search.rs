@@ -1,6 +1,6 @@
 //! Hybrid retrieval (flow ②): BM25 over `chunks_fts` and brute-force vector KNN,
 //! retrieved in parallel and fused by RRF, then resolved up from chunks to notes
-//! (ADR-0008). A served result is a claim of evidence, which is what
+//! (architecture.md). A served result is a claim of evidence, which is what
 //! [`lexical_evidence`] and [`EvidenceBar`] are for (ADR-0015).
 
 use crate::db;
@@ -8,7 +8,7 @@ use crate::embed::Embedder;
 use crate::error::Result;
 use std::collections::HashMap;
 
-/// The RRF constant, k=60 (index-engine.md §1).
+/// The RRF constant, k=60 (architecture.md).
 pub const RRF_K: usize = 60;
 
 /// A fused search result, resolved to the note it belongs to.
@@ -248,7 +248,7 @@ fn fts_tokens(conn: &rusqlite::Connection, terms: &[String]) -> Result<Vec<Strin
 }
 
 /// The per-model evidence bar a query is judged against (ADR-0015). Keyed to the model
-/// (ADR-0007) and measured in the eval harness.
+/// (M2) and measured in the eval harness.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvidenceBar {
     /// Minimum [`LexicalEvidence::term_coverage`] for a lexical anchor.
@@ -344,7 +344,7 @@ pub fn keyword_only_search(
 }
 
 /// Hybrid search: BM25 ⊕ vector(query) -> RRF -> top `limit`, resolved to notes
-/// (ADR-0008). A `limit` of 0 returns before the costly query embedding.
+/// (architecture.md). A `limit` of 0 returns before the costly query embedding.
 pub fn hybrid_search(
     conn: &rusqlite::Connection,
     embedder: &dyn Embedder,
@@ -396,7 +396,7 @@ pub fn cosine_of_distance(distance: f32) -> f64 {
 }
 
 /// Vector-only search: the dense half of [`hybrid_search`] alone. An eval ablation
-/// instrument, not a product surface (ADR-0013, GH #158). Scores are negated L2 distance,
+/// instrument, not a product surface (evals.md, GH #158). Scores are negated L2 distance,
 /// not comparable with RRF scores.
 pub fn vector_only_search(
     conn: &rusqlite::Connection,

@@ -100,7 +100,7 @@ fn pragmas_and_schema_version_persist_across_reopen() {
     assert_eq!(rows, 1, "migration must be idempotent across reopen");
 }
 
-/// The first open of an index can lose a lock race and must wait it out (ADR-0021). Made
+/// The first open of an index can lose a lock race and must wait it out (C1). Made
 /// deterministic by holding the lock outright. `IMMEDIATE`, not `EXCLUSIVE`: `EXCLUSIVE`
 /// blocks the read half, which the busy handler covers, so it would pass without the fix.
 #[test]
@@ -176,7 +176,7 @@ fn stale_index(db_path: &std::path::Path) {
     .unwrap();
 }
 
-/// Concurrent openers of a stale index leave one complete schema and none fails (ADR-0021,
+/// Concurrent openers of a stale index leave one complete schema and none fails (C1,
 /// C1). The quiet failure is missing tables behind every `Ok`. A strong probe (7 of 8 runs
 /// caught the unfixed bug), not a certainty; the deterministic gates are below.
 #[test]

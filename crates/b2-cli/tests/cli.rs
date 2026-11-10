@@ -595,7 +595,7 @@ fn explain_shows_connections_human_and_json() {
     assert!(json.status.success(), "{}", stderr(&json));
     let v: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(v["path"], "notes/spaced-repetition.md");
-    // Title is the filename (data-model.md §1), not frontmatter `title:`.
+    // Title is the filename (data-model.md), not frontmatter `title:`.
     assert_eq!(v["title"], "spaced-repetition");
     let conns = v["connections"].as_array().expect("connections array");
     assert_eq!(conns.len(), 2);

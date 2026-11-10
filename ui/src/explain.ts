@@ -2,7 +2,7 @@
 // `SimilarExplainView`. The engine decides the facts; this module decides how they read.
 //
 // Every grade is on the strength dots' yardstick (strength.ts). No raw distance is shown:
-// its meaning depends on the vault (search-and-similarity.md §2).
+// its meaning depends on the vault (quickstart.md).
 //
 // The summary label, by fixed rules in order:
 //   1. *Identical text* when the best pair is the same passage in both notes: a high rank

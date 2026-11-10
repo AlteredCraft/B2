@@ -1511,7 +1511,7 @@ async function finishImport(dir: string, imported: string[], refused: string[]):
 // --- tree move / rename (context menu, Move… modal, drag-and-drop) -----------------
 //
 // All three gestures resolve a destination (move.ts) and call one executor; the host
-// rewrites inbound links. Rename changes the file path, like `b2 mv` (data-model.md §1).
+// rewrites inbound links. Rename changes the file path, like `b2 mv` (data-model.md).
 // The open document is re-pointed before the watcher's pulse arrives, or reconcile would
 // report our own move as "moved or removed".
 
@@ -2677,7 +2677,7 @@ async function refreshOpenNoteAfterIndex(): Promise<void> {
   await refreshDiscovery();
 }
 
-// Reindex as project → embed (Shape A, docs/index-engine.md): the fast `project` paints the
+// Reindex as project → embed (Shape A, docs/architecture.md): the fast `project` paints the
 // tree, then the cancellable `embed` streams progress. Doesn't set `state.loading`, so the
 // app stays usable.
 async function doReindex(): Promise<void> {

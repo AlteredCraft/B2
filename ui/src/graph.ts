@@ -6,7 +6,7 @@ import type { NeighborView, ResourceLink, SimilarView, UnresolvedLink } from "./
 // Extension-ful: node's type-stripping resolves value imports by real path.
 import { strengthBand } from "./strength.ts";
 
-/** The core verbs (data-model.md §2) plus the tolerated tail; color encodes the verb. */
+/** The core verbs (data-model.md) plus the tolerated tail; color encodes the verb. */
 export type Category = "references" | "supports" | "contradicts" | "other";
 
 const CORE_VERBS = new Set(["references", "supports", "contradicts"]);

@@ -202,7 +202,7 @@ export const api = {
   ): Promise<LinkReport> => invoke("link", { src, dst, relation, explanation }),
 
   /**
-   * Reindex phase 1: the model-free projection (docs/index-engine.md). Once it resolves the
+   * Reindex phase 1: the model-free projection (docs/architecture.md). Once it resolves the
    * tree and keyword search are live; `embed` fills the vectors.
    */
   project: (): Promise<ProjectReport> => invoke("project"),

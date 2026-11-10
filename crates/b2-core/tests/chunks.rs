@@ -1,4 +1,4 @@
-//! The qmd-heuristic chunker (index-engine.md, GH #19): size-targeted, overlapping,
+//! The qmd-heuristic chunker (architecture.md, GH #19): size-targeted, overlapping,
 //! Markdown-aware chunks carrying a `heading_path`.
 
 mod common;

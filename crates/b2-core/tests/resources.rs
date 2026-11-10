@@ -1,4 +1,4 @@
-//! Resources: inventory and graph (data-model.md §10). The `resources` table, resource
+//! Resources: inventory and graph (data-model.md). The `resources` table, resource
 //! edges (dangling means neither target resolved), the walk, and dispatch by shape.
 
 use b2_core::{open, Vault, SCHEMA_VERSION};
@@ -487,7 +487,7 @@ fn explain_resource_carries_metadata_and_backlinks() {
     assert_eq!(view.backlinks.len(), 1);
     let b = &view.backlinks[0];
     assert_eq!(b.path, "notes/card.md");
-    // Title is the filename (data-model.md §1).
+    // Title is the filename (data-model.md).
     assert_eq!(b.title.as_deref(), Some("card"));
     assert_eq!(b.r#type, "references");
     assert_eq!(b.caption.as_deref(), Some("a tiny diagram"));

@@ -3,7 +3,7 @@
 //
 // The drop inserts into the editor buffer, as `[[` completion does, and the bytes reach
 // disk through the normal `write_note` path, so W1 holds. It writes an untyped body link
-// (data-model.md §2), not a typed `b2_relations:` entry like the card's Link… item.
+// (data-model.md), not a typed `b2_relations:` entry like the card's Link… item.
 //
 // Where the link goes is pure (node tests it); main.ts owns the `DragEvent` plumbing,
 // the save and the refresh.

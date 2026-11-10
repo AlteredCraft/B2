@@ -19,7 +19,7 @@ export type SideFold =
 
 /**
  * One navigable row of the side pane. `key` is its identity across a repaint, and carries
- * the list position because two edges to one target are legal (data-model.md §2).
+ * the list position because two edges to one target are legal (data-model.md).
  */
 export interface SideRow {
   key: string;

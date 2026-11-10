@@ -157,7 +157,7 @@ fn create_note_writes_a_minimal_note_model_free() {
     let report = vault.create_note("inbox/idea").unwrap();
     assert_eq!(report.path, "inbox/idea.md");
 
-    // No title: the display title is the filename (data-model.md §1).
+    // No title: the display title is the filename (data-model.md).
     let text = fs::read_to_string(root.join("inbox/idea.md")).unwrap();
     assert!(!text.contains("b2id"), "nothing is stamped: {text}");
     // GH #80.
